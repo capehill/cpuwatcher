@@ -9,7 +9,6 @@ Special thanks to Thomas Frieden, Olaf Barthel, Alex Carmona and Dave Fisher.
 
 TODO:
 - replace deprecated functions
-- remove transparency hack
 - tooltype support
 - prefs editor
 
@@ -58,7 +57,7 @@ Change log:
 #include <stdlib.h>
 #include <string.h>
 
-static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.6 (27.7.2016)";
+static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.6 (28.7.2016)";
 
 #define MINUTES 5
 #define XSIZE (60 * MINUTES)
@@ -137,7 +136,7 @@ static struct TimeRequest *pause_req = NULL;
 static struct TimeVal idle_start, idle_finish, idle_time;
 
 typedef struct {
-	struct BitMap *bm, *store_bm;
+	struct BitMap *bm;
 	struct MsgPort *timer_port, *user_port;
 	struct Task *idle_task;
 	struct TimeRequest *timer_req;
@@ -323,47 +322,11 @@ static void plot_net(ULONG* const ptr, const WORD lpr)
 	}
 }
 
-/* Copy graphics from WorkBench screen for transparency trick */
-static void copy_background(/*struct Window * const window,*/ struct BitMap * const store_bm)
-{
-	if ( ! (store_bm && window) )
-	{
-		return;
-	}
-
-	if ( show_bits & TRANSPARENT )
-	{
-		//struct Window *w = window->NextWindow;
-		HideWindow( window );
-		struct Screen *scr = LockPubScreen( NULL );
-		if ( scr )
-		{
-			BltBitMap( scr->RastPort.BitMap,
-				window->LeftEdge+window->BorderLeft, window->TopEdge+window->BorderTop,
-				store_bm, 0, 0,
-				window->Width - (window->BorderRight + window->BorderLeft),
-				window->Height - (window->BorderBottom + window->BorderTop),
-				0xC0, 0xFF, NULL );
-			UnlockPubScreen( NULL, scr );
-		}
-		ShowWindow( window, /*NULL*/ WINDOW_FRONTMOST /*w*/ );
-		ActivateWindow( window );
-	}
-}
-
 static void refresh_window(Context *ctx)
 {
-	if ( ! (ctx->bm && window && ctx->store_bm) )
-	{
-		return;
-	}
-
 	if (show_bits & TRANSPARENT)
 	{
-		BltBitMap( ctx->store_bm, 0, 0, ctx->bm, 0, 0,
-			window->Width - (window->BorderRight + window->BorderLeft),
-			window->Height - (window->BorderBottom + window->BorderTop),
-			0xC0, 0xFF, NULL );
+		// TODO
 	}
 
 	struct RenderInfo ri;
@@ -377,7 +340,7 @@ static void refresh_window(Context *ctx)
 		WORD x, y;
 
 		// Clear background to black
-		if ( ! (show_bits & TRANSPARENT) )
+		//if ( ! (show_bits & TRANSPARENT) )
 		{
 			//memset( ri.Memory, 0, (window->Height - (window->BorderBottom + window->BorderTop)) * ri.BytesPerRow );
 
@@ -745,13 +708,6 @@ BOOL allocate_resources(Context *ctx)
 		goto clean;
 	}
 
-	// Transparency buffer
-	ctx->store_bm = p96AllocBitMap( XSIZE, 2*YSIZE, 32, BMF_CLEAR/*|BMF_USERPRIVATE*/, NULL, RGBFB_A8R8G8B8 );
-	if ( ! ctx->bm ) {
-		printf("Couln't allocate bitmap\n");
-		goto clean;
-	}
-
 	ctx->user_port = CreateMsgPort();
 	if ( ! ctx->user_port ) {
 		printf("Couldn't create user port\n");
@@ -882,7 +838,7 @@ static void handle_window_events(Context *ctx)
 					update = TRUE;
 					if ( show_bits & TRANSPARENT)
 					{
-						copy_background( ctx->store_bm );
+						//TODO
 					}
 					break;
 
@@ -956,13 +912,6 @@ static void handle_window_events(Context *ctx)
 			else
 			{
 				last_time = seconds * 1000000 + micros;
-
-				// When window is moved, copy new background graphics to fake transparency
-				if ( show_bits & TRANSPARENT )
-				{
-					copy_background( ctx->store_bm );
-					refresh_window(ctx);
-				}
 			}
 		}
 	}
@@ -1128,10 +1077,6 @@ static void free_resources(Context *ctx)
 
 	if (ctx->bm) {
 		p96FreeBitMap( ctx->bm );
-	}
-
-	if (ctx->store_bm) {
-		p96FreeBitMap( ctx->store_bm );
 	}
 
 	if (cpu) FreeVec( cpu );
