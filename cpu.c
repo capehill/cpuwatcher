@@ -8,7 +8,6 @@ CPU Watcher 0.6 by Juha Niemimäki (c) 2005 - 2016
 Special thanks to Thomas Frieden, Olaf Barthel, Alex Carmona and Dave Fisher.
 
 TODO:
-- replace deprecated functions
 - tooltype support
 - prefs editor
 
@@ -44,7 +43,6 @@ Change log:
 
 #include <proto/exec.h>
 #include <proto/timer.h>
-#include <proto/picasso96api.h>
 #include <proto/intuition.h>
 #include <proto/graphics.h>
 #include <proto/icon.h>
@@ -97,6 +95,7 @@ static ULONG ul_col = UL_COL;
 // This set of flags controls which graphs are drawn
 static ULONG show_bits = SHOW_CPU | SHOW_GRID | SHOW_PMEM | SHOW_VMEM | SHOW_GMEM | SOLID_DRAW | DRAGBAR;
 
+extern struct Library *GfxBase;
 struct TimerIFace *ITimer;
 
 // Graph data
@@ -128,9 +127,6 @@ static volatile BOOL simple_mode = FALSE;
 
 // How many times idle task was ran during 1 second. Run count 0 means 100% cpu usage, 100 means 0 % CPU usage
 static ULONG run_count = 0;
-
-// Used by idle task for 1/100 second pauses when running in non-busy looping mode
-static struct TimeRequest *pause_req = NULL;
 
 // For keeping book of time
 static struct TimeVal idle_start, idle_finish, idle_time;
@@ -170,11 +166,28 @@ static void my_launch(void)
 	GetSysTime(&idle_start);
 }
 
-static void idler(void)
+static void idler(uint32 p1)
 {
-	struct MsgPort *idle_port = CreateMsgPort();
+    // Used by idle task for 1/100 second pauses when running in non-busy looping mode
+	struct TimeRequest *pause_req = NULL;
+	struct MsgPort *idle_port = NULL;
+	Context *ctx = (Context *)p1;
+
+	idle_port = AllocSysObjectTags(ASOT_PORT,
+		ASOPORT_Name, "idler_port", TAG_DONE);
 	
-	if ( ! idle_port ) {
+	if (!idle_port) {
+		idler_trouble = TRUE;
+		goto die;
+	}
+
+	pause_req = AllocSysObjectTags(ASOT_IOREQUEST,
+		ASOIOR_Size, sizeof(struct TimeRequest),
+		ASOIOR_ReplyPort, idle_port,
+		ASOIOR_Duplicate, ctx->timer_req,
+		TAG_DONE);
+
+	if (!pause_req) {
 		idler_trouble = TRUE;
 		goto die;
 	}
@@ -186,20 +199,13 @@ static void idler(void)
 		goto die;
 	}
 
-	struct Task *me = FindTask(NULL);
-
 	// Signal main task that we are ready
 	Signal( main_task, 1L << main_sig );
 
-	// Wait for main task to obtain ITimer so that timer.device functions can be used
+	// Wait for main task
 	Wait( 1L << idle_sig );
 
-	if (!ITimer) {
-		idler_trouble = TRUE;
-		goto die;
-	}
-
-	pause_req->Request.io_Message.mn_ReplyPort = idle_port;
+	struct Task *me = FindTask(NULL);
 
 	Forbid();
 	me->tc_Switch = my_switch;
@@ -207,7 +213,7 @@ static void idler(void)
 	me->tc_Flags |= TF_SWITCH | TF_LAUNCH;
 	Permit();
 
-	/* Use minimum priority */
+	// Use minimum priority
 	SetTaskPri( me, -127 );
 
 	while ( running ) {
@@ -225,7 +231,7 @@ static void idler(void)
 			pause_req->Time.Seconds = tv.Seconds;
 			pause_req->Time.Microseconds = tv.Microseconds;
 
-			DoIO( (struct IORequest*) pause_req );
+			DoIO( (struct IORequest *) pause_req );
 		}
 	}
 
@@ -235,14 +241,19 @@ static void idler(void)
 	me->tc_Flags ^= TF_SWITCH | TF_LAUNCH;
 	Permit();
 
+die:
+
 	if (idle_sig != -1 ) {
 		FreeSignal( idle_sig );
 	}
 
-die:
-
 	if (idle_port) {
-		DeleteMsgPort(idle_port);
+		FreeSysObject(ASOT_PORT, idle_port);
+	}
+
+	if (pause_req)
+	{
+		FreeSysObject(ASOT_IOREQUEST, pause_req);
 	}
 
 	// Tell the main task that we can leave now (error flag may be set!)
@@ -324,18 +335,21 @@ static void plot_net(ULONG* const ptr, const WORD lpr)
 
 static void refresh_window(Context *ctx)
 {
-	if (show_bits & TRANSPARENT)
-	{
+	if (show_bits & TRANSPARENT) {
 		// TODO
 	}
 
-	struct RenderInfo ri;
-	ULONG lock = p96LockBitMap( ctx->bm, (UBYTE *)&ri, sizeof(struct RenderInfo) );
+	APTR base_address;
+	uint32 bytes_per_row;
 
-	if ( lock )
-	{
-		ULONG* ptr = (ULONG*) ri.Memory;
-		LONG lpr = ri.BytesPerRow / 4;
+	APTR lock = LockBitMapTags( ctx->bm,
+		LBM_BaseAddress, &base_address,
+		LBM_BytesPerRow, &bytes_per_row,
+		TAG_DONE );
+
+	if ( lock ) {
+		ULONG *ptr = base_address;
+		LONG lpr = bytes_per_row / 4;
 
 		WORD x, y;
 
@@ -344,11 +358,8 @@ static void refresh_window(Context *ctx)
 		{
 			//memset( ri.Memory, 0, (window->Height - (window->BorderBottom + window->BorderTop)) * ri.BytesPerRow );
 
-			ptr = (ULONG*) ri.Memory;
-			for (y = 0; y < window->Height-(window->BorderBottom + window->BorderTop); y++)
-			{
-				for (x = 0; x < XSIZE; x++)
-				{
+			for (y = 0; y < window->Height-(window->BorderBottom + window->BorderTop); y++) {
+				for (x = 0; x < XSIZE; x++) {
 					ptr[x] = bg_col;
 				}
 
@@ -356,7 +367,7 @@ static void refresh_window(Context *ctx)
 			}
 		}
 
-		ptr = (ULONG*) ri.Memory;
+		ptr = base_address;
 
 		if ( show_bits & SHOW_GRID )
 		{
@@ -370,7 +381,7 @@ static void refresh_window(Context *ctx)
 				ptr += 10 * lpr;
 			}
 
-			ptr = (ULONG*) ri.Memory;
+			ptr = base_address;
 
 			// Vertical lines
 			for ( x = 0; x < XSIZE; x += 60 )
@@ -421,7 +432,7 @@ static void refresh_window(Context *ctx)
 					ptr += 10 * lpr;
 				}
 
-				ptr = (ULONG*) ri.Memory + lpr * YSIZE;
+				ptr = (uint32 *) base_address + lpr * YSIZE;
 
 				// Vertical lines
 				for ( x = 0; x < XSIZE; x += 60 )
@@ -436,7 +447,7 @@ static void refresh_window(Context *ctx)
 				}
 			}
 
-			ptr = (ULONG*) ri.Memory + lpr * YSIZE;
+			ptr = (uint32 *)base_address + lpr * YSIZE;
 
 			//plot( ptr, lpr, download, DL_COL );
 			//plot( ptr, lpr, upload, UL_COL );
@@ -444,7 +455,7 @@ static void refresh_window(Context *ctx)
 			plot_net( ptr, lpr );
 		}
 
-		p96UnlockBitMap( ctx->bm, lock );
+		UnlockBitMap( lock );
 	}
 
 	BltBitMapRastPort(ctx->bm, 0, 0, window->RPort, window->BorderLeft, window->BorderTop,
@@ -676,6 +687,18 @@ static void handle_args(int argc, char ** argv)
 	}
 }
 
+void *my_alloc(size_t size)
+{
+	return AllocVecTags(size,
+	 	AVT_ClearWithValue, 0,
+		TAG_DONE);
+}
+
+void my_free(void *ptr)
+{
+	FreeVec(ptr);
+}
+
 BOOL allocate_resources(Context *ctx)
 {
 	BOOL result = FALSE;
@@ -687,48 +710,53 @@ BOOL allocate_resources(Context *ctx)
 		goto clean;
 	}
 
-	cpu = AllocVec( XSIZE * sizeof(UBYTE), MEMF_ANY|MEMF_CLEAR );
+	cpu = my_alloc( XSIZE );
 
-	pub_mem = AllocVec( XSIZE * sizeof(UBYTE), MEMF_ANY|MEMF_CLEAR );
-	virt_mem = AllocVec( XSIZE * sizeof(UBYTE), MEMF_ANY|MEMF_CLEAR );
-	gfx_mem = AllocVec( XSIZE * sizeof(UBYTE), MEMF_ANY|MEMF_CLEAR );
+	pub_mem = my_alloc( XSIZE );
+	virt_mem = my_alloc( XSIZE );
+	gfx_mem = my_alloc( XSIZE );
 
-	upload = AllocVec( XSIZE * sizeof(UBYTE), MEMF_ANY|MEMF_CLEAR );
-	download = AllocVec( XSIZE * sizeof(UBYTE), MEMF_ANY|MEMF_CLEAR );
+	upload = my_alloc( XSIZE );
+	download = my_alloc( XSIZE );
 
 	if ( ! ( cpu && pub_mem && virt_mem && gfx_mem && upload && download ) ) {
 		printf("Out of memory\n");
 		goto clean;
 	}
 
-	// Draw buffer
-	ctx->bm = p96AllocBitMap( XSIZE, 2*YSIZE, 32, BMF_CLEAR/*|BMF_USERPRIVATE*/, NULL, RGBFB_A8R8G8B8 );
+	ctx->bm = AllocBitMapTags( XSIZE, 2 * YSIZE, 32,
+		BMATags_PixelFormat, PIXF_A8R8G8B8,
+		BMATags_Clear, TRUE,
+		BMATags_UserPrivate, TRUE,
+		TAG_DONE );
+	
 	if ( ! ctx->bm ) {
 		printf("Couln't allocate bitmap\n");
 		goto clean;
 	}
 
-	ctx->user_port = CreateMsgPort();
+	ctx->user_port = AllocSysObjectTags(ASOT_PORT,
+		ASOPORT_Name, "user_port",
+		TAG_DONE);
+
 	if ( ! ctx->user_port ) {
 		printf("Couldn't create user port\n");
 		goto clean;
 	}
 
-	ctx->idle_task = CreateTask( "Uuno", 0, idler, 4096, NULL );
-
-	if ( !ctx->idle_task ) {
-		printf("Couldn't create idler task\n");
-		goto clean;
-	}
-
-	ctx->timer_port = CreateMsgPort();
+	ctx->timer_port = AllocSysObjectTags(ASOT_PORT,
+		ASOPORT_Name, "timer_port",
+		TAG_DONE);
 
 	if ( !ctx->timer_port ) {
 		printf("Couldn't create timer port\n");
 		goto clean;
 	}
 
-	ctx->timer_req = (struct TimeRequest *) CreateIORequest(ctx->timer_port, sizeof(struct TimeRequest) );
+	ctx->timer_req = AllocSysObjectTags(ASOT_IOREQUEST,
+		ASOIOR_Size, sizeof(struct TimeRequest),
+		ASOIOR_ReplyPort, ctx->timer_port,
+		TAG_DONE);
 
 	if ( !ctx->timer_req ) {
 		printf("Couldn't create IO request\n");
@@ -746,15 +774,15 @@ BOOL allocate_resources(Context *ctx)
 		printf("Couldn't get Timer interface\n");
 		goto clean;
 	}
-
-	pause_req = AllocVec( sizeof(struct TimeRequest), MEMF_ANY | MEMF_CLEAR );
 	
-	if ( ! pause_req ) {
-		printf("Couldn't allocate TimeRequest\n");
+	ctx->idle_task = CreateTaskTags("Uuno", 0, idler, 4096,
+		AT_Param1, ctx,
+		TAG_DONE);
+
+	if ( !ctx->idle_task ) {
+		printf("Couldn't create idler task\n");
 		goto clean;
 	}
-
-	CopyMem( ctx->timer_req, pause_req, sizeof(struct TimeRequest) );
 
 	window = OpenWindowTags( NULL,
 		WA_Left, x_pos,
@@ -783,7 +811,7 @@ clean:
 static void handle_window_events(Context *ctx)
 {
 	struct IntuiMessage *msg;
-	while ( (msg = (struct IntuiMessage*) GetMsg( window->UserPort ) ) )
+	while ( (msg = (struct IntuiMessage *) GetMsg( window->UserPort ) ) )
 	{
 		const ULONG Class = msg->Class;
 		const UWORD Code = msg->Code;
@@ -791,18 +819,14 @@ static void handle_window_events(Context *ctx)
 		const ULONG seconds = msg->Seconds;
 		const ULONG micros = msg->Micros;
 
-		ReplyMsg( (struct Message*) msg );
+		ReplyMsg( (struct Message *) msg );
 
-		if ( Class == IDCMP_CLOSEWINDOW )
-		{
+		if ( Class == IDCMP_CLOSEWINDOW ) {
 		 	running = FALSE;
-		}
-		else if ( Class == IDCMP_VANILLAKEY )
-		{
+		} else if ( Class == IDCMP_VANILLAKEY ) {
 			BOOL update = FALSE;
 
-			switch ( Code )
-			{
+			switch ( Code ) {
 				case 'c':
 					show_bits ^= SHOW_CPU;
 					update = TRUE;
@@ -836,8 +860,7 @@ static void handle_window_events(Context *ctx)
 				case 't':
 					show_bits ^= TRANSPARENT;
 					update = TRUE;
-					if ( show_bits & TRANSPARENT)
-					{
+					if ( show_bits & TRANSPARENT) {
 						//TODO
 					}
 					break;
@@ -874,13 +897,10 @@ static void handle_window_events(Context *ctx)
 						WA_UserPort, ctx->user_port,
 						TAG_DONE );
 
-					if ( !window )
-					{
+					if ( !window ) {
 						printf("Panic - can't reopen window!\n");
 						running = FALSE;
-					}
-					else
-					{
+					} else {
 						ActivateWindow( window );
 						update = TRUE;
 					}
@@ -894,23 +914,16 @@ static void handle_window_events(Context *ctx)
 					break;
 			};
 
-            if ( update )
-            {
+			if ( update ) {
 				refresh_window(ctx);
             }
-
-		}
-		else if ( Class == IDCMP_CHANGEWINDOW )
-		{
+		} else if ( Class == IDCMP_CHANGEWINDOW ) {
 			// Work-around for queued window move events, causes blinking in solid window move mode!
 			static ULONG last_time = 0;
 
-			if (last_time + 500000 > seconds * 1000000 + micros )
-			{
+			if (last_time + 500000 > seconds * 1000000 + micros ) {
 
-			}
-			else
-			{
+			} else {
 				last_time = seconds * 1000000 + micros;
 			}
 		}
@@ -920,6 +933,8 @@ static void handle_window_events(Context *ctx)
 static void handle_timer_events(Context *ctx)
 {
 	// Window string is a bit shorter, window is currently only about 300 pixels wide anyway
+	//char buffer[256];
+	//char
 	/*static*/ char *w_format 		= "CPU: %3d%% V: %3d%% P: %3d%% G: %3d%%";
 	/*static*/ char *s_format 		= "CPU: %3d%% Virtual: %3d%% Public: %3d%% Graphics: %3d%% Download: %4.1fKB/s Upload: %4.1fKB/s Mode: %c";
 	/*static*/ char w_title_string[] = "CPU: 100%% V: 100%% P: 100%% G: 100%%";
@@ -941,13 +956,10 @@ static void handle_timer_events(Context *ctx)
 	{
 		UBYTE value = 100;
 
-		if ( simple_mode )
-		{
+		if ( simple_mode ) {
 			value -= run_count;
 			//printf("value %d %ld\n", value, run_count);
-		}
-		else
-		{
+		} else {
 			value -= 100 * (idle_time.Seconds * 1000000 + idle_time.Microseconds) / (float) 1000000;
 		}
 
@@ -968,12 +980,15 @@ static void handle_timer_events(Context *ctx)
         if ( value > 100 ) value = 100;
 		virt_mem[ iter % XSIZE ] = value;
 
-		ULONG free, total;
-		p96GetBoardDataTags( 0, P96BD_FreeMemory, &free, P96BD_TotalMemory, &total, TAG_DONE );
-
-		value = 100 * (float) free / total;
-        if ( value > 100 ) value = 100;
-		gfx_mem[ iter % XSIZE ] = value;
+		uint64 total, free;
+		
+		if (GetBoardDataTags(0, GBD_TotalMemory, &total, GBD_FreeMemory, &free, TAG_DONE) == 2) {
+			value = 100.0 * free / total;
+	        if ( value > 100 ) value = 100;
+			gfx_mem[ iter % XSIZE ] = value;
+		} else {
+			gfx_mem[ iter % XSIZE ] = 0;
+		}
 
 		//
 		// Network traffic
@@ -985,11 +1000,9 @@ static void handle_timer_events(Context *ctx)
 		float dl_mult = 1.0f, ul_mult = 1.0f;
 		UBYTE dl_p, ul_p;
 
-		if ( update_netstats( &dl_p, &ul_p, &dl_mult, &ul_mult, &dl_speed, &ul_speed ) )
-		{
+		if ( update_netstats( &dl_p, &ul_p, &dl_mult, &ul_mult, &dl_speed, &ul_speed ) ) {
 			UWORD i;
-			for ( i = 0; i < XSIZE; i++ )
-			{
+			for ( i = 0; i < XSIZE; i++ ) {
 				download[ i ] *= dl_mult;
 				upload[ i ] *= ul_mult;
 			}
@@ -1040,23 +1053,19 @@ static void free_resources(Context *ctx)
 	}
 
 	if (ITimer) {
-		DropInterface( (struct Interface*) ITimer );
+		DropInterface( (struct Interface *) ITimer );
 	}
 
 	if ( ctx->timer_device == 0 && ctx->timer_req ) {
-		CloseDevice( (struct IORequest*) ctx->timer_req );
+		CloseDevice( (struct IORequest *) ctx->timer_req );
 	}
 
-	if ( ctx->timer_req ) {
-		DeleteIORequest( (struct IORequest*) ctx->timer_req );
+	if (ctx->timer_req) {
+		FreeSysObject(ASOT_IOREQUEST, ctx->timer_req);
 	}
 
-	if (pause_req) {
-		FreeVec( pause_req );
-	}
-
-	if ( ctx->timer_port ) {
-		DeleteMsgPort( ctx->timer_port );
+	if (ctx->timer_port) {
+		FreeSysObject(ASOT_PORT, ctx->timer_port);
 	}
 
 	if ( ctx->idle_task ) {
@@ -1071,22 +1080,22 @@ static void free_resources(Context *ctx)
 		CloseWindow( window );
 	}
 
-	if ( ctx->user_port ) {
-		DeleteMsgPort( ctx->user_port );
+	if (ctx->user_port) {
+		FreeSysObject(ASOT_PORT, ctx->user_port);
 	}
 
 	if (ctx->bm) {
-		p96FreeBitMap( ctx->bm );
+		FreeBitMap( ctx->bm );
 	}
 
-	if (cpu) FreeVec( cpu );
+	if (cpu) my_free( cpu );
 
-	if (gfx_mem) FreeVec( gfx_mem );
-	if (pub_mem) FreeVec( pub_mem );
-	if (virt_mem) FreeVec( virt_mem );
+	if (gfx_mem) my_free( gfx_mem );
+	if (pub_mem) my_free( pub_mem );
+	if (virt_mem) my_free( virt_mem );
 
-	if (upload) FreeVec( upload );
-	if (download) FreeVec( download );
+	if (upload) my_free( upload );
+	if (download) my_free( download );
 }
 
 static void init_context(Context *ctx)
@@ -1129,7 +1138,6 @@ BOOL sync_to_idler_task(Context *ctx)
 		goto clean;
 	}
 
-	// Send message, "We've got ITimer now", back
 	Signal( ctx->idle_task, 1L << idle_sig );
 
 	result = TRUE;
@@ -1142,6 +1150,11 @@ int main(int argc, char ** argv)
 {
 	Context ctx;
 	init_context(&ctx);
+
+	if (GfxBase->lib_Version < 54) {
+		printf("graphics.library V54 needed\n");
+		goto clean;
+	}
 
 	handle_args(argc, argv);
 
