@@ -14,8 +14,12 @@ TODO:
 Change log:
 
 0.6
-- fixed uninitialized ITimer issue
+- requires graphics.library V54
+- replaced deprecated system calls
+- fixed some task sync issues
+- removed pseudo transparency
 - code cleanup and refactoring
+- started a GitHub project
 
 0.5
 - added tooltypes support
@@ -139,6 +143,9 @@ typedef struct {
 	struct TimeRequest *timer_req;
 	BYTE timer_device;
 	struct TimeVal tv;
+	APTR base_address;
+	uint32 bytes_per_row;
+	uint32 lpr;
 } Context;
 
 static int x_pos = 0;
@@ -175,7 +182,8 @@ static void idler(uint32 p1)
 	Context *ctx = (Context *)p1;
 
 	idle_port = AllocSysObjectTags(ASOT_PORT,
-		ASOPORT_Name, "idler_port", TAG_DONE);
+		ASOPORT_Name, "idler_port",
+		TAG_DONE);
 	
 	if (!idle_port) {
 		idler_trouble = TRUE;
@@ -264,42 +272,34 @@ die:
 	Wait( 0L );
 }
 
-/* Plots a graph to bitmap
-- ptr is a bitmap pointer
-- lpr means "longs per row", ie byter per row / 4
-- array is pointer to graph data
-*/
-static void plot(ULONG* const ptr, const WORD lpr, const UBYTE* const array, const ULONG color)
+static void plot(Context *ctx, const UBYTE* const array, const ULONG color)
 {
+	ULONG *ptr = ctx->base_address;
+
 	WORD x, y;
-	for ( x=0; x < XSIZE; x++ )
-	{
+	for ( x=0; x < XSIZE; x++ ) {
 		UBYTE cur_y = array[ (iter+1 + x) % XSIZE ];
 
 		// Plot the current dot
-		*(ptr + x + (YSIZE - 1 - cur_y) * lpr ) = color;
+		*(ptr + x + (YSIZE - 1 - cur_y) * ctx->lpr ) = color;
 
 		// Make the plotted line solid
-		if ( show_bits & SOLID_DRAW )
-		{
+		if ( show_bits & SOLID_DRAW ) {
 		    UBYTE prev_y = array[ (iter + x) % XSIZE ];
 			WORD diff = cur_y - prev_y;
 
-			if ( x > 0 && diff != 0 )
-			{
-				if ( diff < 0 )
-				{
+			if ( x > 0 && diff != 0 ) {
+				if ( diff < 0 ) {
 					UBYTE temp = cur_y;
 					cur_y = prev_y;
 					prev_y = temp;
 				}
 
-				ULONG *_ptr = ptr + x + (YSIZE-1-prev_y) * lpr;
+				ULONG *_ptr = ptr + x + (YSIZE - 1 - prev_y) * ctx->lpr;
 
-				for ( y = prev_y; y <= cur_y; y++ )
-				{
+				for ( y = prev_y; y <= cur_y; y++ ) {
 					*_ptr = color;
-					_ptr -= lpr;
+					_ptr -= ctx->lpr;
 				}
 			}
 		}
@@ -307,156 +307,102 @@ static void plot(ULONG* const ptr, const WORD lpr, const UBYTE* const array, con
 }
 
 /* Special function to plot 2-sided network graph */
-static void plot_net(ULONG* const ptr, const WORD lpr)
+static void plot_net(Context *ctx)
 {
+	ULONG *ptr = (ULONG *)ctx->base_address + ctx->lpr * YSIZE;
 	WORD x, y;
-	for ( x = 0; x < XSIZE; x++ )
-	{
-		// Upload, above the center line
-		WORD start_y = - upload[ (iter+1 + x) % XSIZE ] / 2;
-		ULONG *_ptr = ptr + x + ( YSIZE/2 + start_y) * lpr;
 
-		for ( y = start_y; y < 0; y++ )
-		{
+	for ( x = 0; x < XSIZE; x++ ) {
+		// Upload, above the center line
+		WORD start_y = - upload[ (iter + 1 + x) % XSIZE ] / 2;
+		ULONG *_ptr = ptr + x + ( YSIZE / 2 + start_y) * ctx->lpr;
+
+		for ( y = start_y; y < 0; y++ ) {
 			*_ptr = ul_col;
-			_ptr += lpr;
+			_ptr += ctx->lpr;
 		}
 
 		// Download, below the center line
-		WORD end_y = download[ (iter+1 + x) % XSIZE] / 2;
-		_ptr = ptr + x + (YSIZE/2+1) * lpr;
+		WORD end_y = download[ (iter + 1 + x) % XSIZE] / 2;
+		_ptr = ptr + x + (YSIZE / 2 + 1) * ctx->lpr;
 
-		for ( y = 1 ; y <= end_y; y++ )
-		{
+		for ( y = 1 ; y <= end_y; y++ ) {
 			*_ptr = dl_col;
-			_ptr += lpr;
+			_ptr += ctx->lpr;
+		}
+	}
+}
+
+static void clear(Context *ctx)
+{
+	ULONG *ptr = ctx->base_address;
+
+	WORD height = window->Height - (window->BorderBottom + window->BorderTop);
+	WORD x, y;
+
+	for (y = 0; y < height; y++) {
+		for (x = 0; x < XSIZE; x++) {
+			ptr[x] = bg_col;
+		}
+
+		ptr += ctx->lpr;
+	}
+}
+
+static void draw_grid(Context *ctx)
+{
+    ULONG *ptr = ctx->base_address;
+	WORD x, y;
+
+	int total_height = (show_bits & SHOW_NET) ? 2 * YSIZE : YSIZE;
+
+	// Horizontal lines
+	for ( y = 0; y < total_height; y += 10 ) {
+		for ( x = 0; x < XSIZE; x++ ) {
+			ptr[x] = grid_col;
+		}
+		ptr += 10 * ctx->lpr;
+	}
+
+	ptr = ctx->base_address;
+
+	// Vertical lines
+	for ( x = 0; x < XSIZE; x += 60 ) {
+		ULONG* _ptr = ptr + x;
+
+		for ( y = 0; y < total_height; y++ ) {
+			*_ptr = grid_col;
+			_ptr += ctx->lpr;
 		}
 	}
 }
 
 static void refresh_window(Context *ctx)
 {
-	if (show_bits & TRANSPARENT) {
-		// TODO
+	clear(ctx);
+
+	if ( show_bits & SHOW_GRID ) {
+		draw_grid(ctx);
 	}
 
-	APTR base_address;
-	uint32 bytes_per_row;
+	if ( show_bits & SHOW_PMEM ) {
+		plot(ctx, pub_mem, pub_col );
+	}
 
-	APTR lock = LockBitMapTags( ctx->bm,
-		LBM_BaseAddress, &base_address,
-		LBM_BytesPerRow, &bytes_per_row,
-		TAG_DONE );
+	if ( show_bits & SHOW_VMEM ) {
+		plot(ctx, virt_mem, virt_col );
+	}
 
-	if ( lock ) {
-		ULONG *ptr = base_address;
-		LONG lpr = bytes_per_row / 4;
+	if ( show_bits & SHOW_GMEM ) {
+		plot(ctx, gfx_mem, gfx_col );
+	}
 
-		WORD x, y;
+	if ( show_bits & SHOW_CPU ) {
+		plot(ctx, cpu, cpu_col );
+	}
 
-		// Clear background to black
-		//if ( ! (show_bits & TRANSPARENT) )
-		{
-			//memset( ri.Memory, 0, (window->Height - (window->BorderBottom + window->BorderTop)) * ri.BytesPerRow );
-
-			for (y = 0; y < window->Height-(window->BorderBottom + window->BorderTop); y++) {
-				for (x = 0; x < XSIZE; x++) {
-					ptr[x] = bg_col;
-				}
-
-				ptr += lpr;
-			}
-		}
-
-		ptr = base_address;
-
-		if ( show_bits & SHOW_GRID )
-		{
-			// Horizontal lines
-			for ( y = 0; y < YSIZE; y += 10 )
-			{
-				for ( x = 0; x < XSIZE; x++ )
-				{
-					ptr[x] = grid_col;
-				}
-				ptr += 10 * lpr;
-			}
-
-			ptr = base_address;
-
-			// Vertical lines
-			for ( x = 0; x < XSIZE; x += 60 )
-			{
-				ULONG* _ptr = ptr + x;
-
-	            for ( y = 0; y < YSIZE; y++ )
-		        {
-					*_ptr = grid_col;
-					_ptr += lpr;
-				}
-			}
-		}
-
-		if ( show_bits & SHOW_PMEM )
-		{
-			plot( ptr, lpr, pub_mem, pub_col );
-		}
-
-		if ( show_bits & SHOW_VMEM )
-		{
-			plot( ptr, lpr, virt_mem, virt_col );
-		}
-
-		if ( show_bits & SHOW_GMEM )
-		{
-			plot( ptr, lpr, gfx_mem, gfx_col );
-		}
-
-		if ( show_bits & SHOW_CPU )
-		{
-			plot( ptr, lpr, cpu, cpu_col );
-		}
-
-		if ( show_bits & SHOW_NET )
-		{
-			ptr += lpr * YSIZE;
-
-			if ( show_bits & SHOW_GRID )
-			{
-				// Horizontal lines
-				for ( y = 0; y < YSIZE; y += 10 )
-				{
-					for ( x = 0; x < XSIZE; x++ )
-					{
-						ptr[x] = grid_col;
-					}
-					ptr += 10 * lpr;
-				}
-
-				ptr = (uint32 *) base_address + lpr * YSIZE;
-
-				// Vertical lines
-				for ( x = 0; x < XSIZE; x += 60 )
-				{
-					ULONG* _ptr = ptr + x;
-
-		            for ( y = 0; y < YSIZE; y++ )
-			        {
-						*_ptr = grid_col;
-						_ptr += lpr;
-					}
-				}
-			}
-
-			ptr = (uint32 *)base_address + lpr * YSIZE;
-
-			//plot( ptr, lpr, download, DL_COL );
-			//plot( ptr, lpr, upload, UL_COL );
-
-			plot_net( ptr, lpr );
-		}
-
-		UnlockBitMap( lock );
+	if ( show_bits & SHOW_NET ) {
+		plot_net(ctx);
 	}
 
 	BltBitMapRastPort(ctx->bm, 0, 0, window->RPort, window->BorderLeft, window->BorderTop,
@@ -465,205 +411,87 @@ static void refresh_window(Context *ctx)
 		0xC0 );
 }
 
-ULONG parse_hex(STRPTR str)
+static ULONG parse_hex(STRPTR str)
 {
 	return strtol(str, NULL, 16);
 }
 
-void read_config(STRPTR file_name)
+static void set_bit(struct DiskObject *disk_object, STRPTR name, int bit)
+{
+	STRPTR tool_type = FindToolType(disk_object->do_ToolTypes, name);
+	
+	if (tool_type) {
+		//if (MatchToolValue(cpu, "True"))
+		{
+			show_bits |= bit;
+		}
+	}
+}
+
+static void set_int(struct DiskObject *disk_object, STRPTR name, int *value)
+{
+	STRPTR tool_type = FindToolType(disk_object->do_ToolTypes, name);
+	
+	if (tool_type) {
+		const int temp = atoi(tool_type);
+		
+		if (temp >= 0) {
+			*value = temp;
+		}
+	}
+}
+
+static void set_bool(struct DiskObject *disk_object, STRPTR name, BOOL *value)
+{
+	STRPTR tool_type = FindToolType(disk_object->do_ToolTypes, name);
+	
+	if (tool_type) {
+		*value = TRUE;
+	}
+}
+
+static void set_color(struct DiskObject *disk_object, STRPTR name, ULONG *value)
+{
+	STRPTR tool_type = FindToolType(disk_object->do_ToolTypes, name);
+	
+	if (tool_type) {
+		*value = parse_hex(tool_type);
+	}
+}
+
+static void read_config(STRPTR file_name)
 {
 	if (file_name) {
 
-		struct DiskObject * disk_object = (struct DiskObject *)GetDiskObject(file_name);
-		if (disk_object)
-		{
-			// Reset
+		struct DiskObject *disk_object = (struct DiskObject *)GetDiskObject(file_name);
+		
+		if (disk_object) {
+
 			show_bits = 0;
 
-			{
-			STRPTR cpu = FindToolType(disk_object->do_ToolTypes, "cpu");
-			if (cpu)
-			{
-				//if (MatchToolValue(cpu, "True"))
-				{
-				//	  printf("cpu\n");
-					show_bits |= SHOW_CPU;
-				}
-			}}
+			set_bit(disk_object, "cpu", SHOW_CPU);
+			set_bit(disk_object, "grid", SHOW_GRID);
+			set_bit(disk_object, "pmem", SHOW_PMEM);
+			set_bit(disk_object, "vmem", SHOW_VMEM);
+			set_bit(disk_object, "gmem", SHOW_GMEM);
+			set_bit(disk_object, "solid", SOLID_DRAW);
+			set_bit(disk_object, "transparent", TRANSPARENT);
+			set_bit(disk_object, "net", SHOW_NET);
+			set_bit(disk_object, "dragbar", DRAGBAR);
 
-			{
-			STRPTR grid = FindToolType(disk_object->do_ToolTypes, "grid");
-			if (grid)
-			{
-				//if (MatchToolValue(grid, "True"))
-				{
-				//	  printf("grid\n");
-					show_bits |= SHOW_GRID;
-				}
-			}}
-
-
-			{
-			STRPTR pmem = FindToolType(disk_object->do_ToolTypes, "pmem");
-			if (pmem)
-			{
-				//if (MatchToolValue(pmem, "True"))
-				{
-				//	  printf("pmem\n");
-					show_bits |= SHOW_PMEM;
-				}
-			}}
-
-			{
-			STRPTR vmem = FindToolType(disk_object->do_ToolTypes, "vmem");
-			if (vmem)
-			{
-				//if (MatchToolValue(vmem, "True"))
-				{
-				//	  printf("vmem\n");
-					show_bits |= SHOW_VMEM;
-				}
-			}}
-
-			{
-			STRPTR gmem = FindToolType(disk_object->do_ToolTypes, "gmem");
-			if (gmem)
-			{
-				//if (MatchToolValue(gmem, "True"))
-				{
-				//	  printf("gmem\n");
-					show_bits |= SHOW_GMEM;
-				}
-			}}
-
-			{
-			STRPTR solid = FindToolType(disk_object->do_ToolTypes, "solid");
-			if (solid)
-			{
-				//if (MatchToolValue(solid, "True"))
-				{
-				//	  printf("soliddraw\n");
-					show_bits |= SOLID_DRAW;
-				}
-			}}
-
-			{
-			STRPTR transparent = FindToolType(disk_object->do_ToolTypes, "transparent");
-			if (transparent)
-			{
-				//if (MatchToolValue(transparent, "True"))
-				{
-				//	  printf("transparent\n");
-					show_bits |= TRANSPARENT;
-				}
-			}}
-
-			{
-			STRPTR net = FindToolType(disk_object->do_ToolTypes, "net");
-			if (net)
-			{
-				//if (MatchToolValue(net, "True"))
-				{
-				//	  printf("net\n");
-					show_bits |= SHOW_NET;
-				}
-			}}
-
-			{
-			STRPTR dragbar = FindToolType(disk_object->do_ToolTypes, "dragbar");
-			if (dragbar)
-			{
-				//if (MatchToolValue(dragbar, "True"))
-				{
-				//	  printf("dragbar\n");
-					show_bits |= DRAGBAR;
-				}
-			}}
-
-			{
-			STRPTR x = FindToolType(disk_object->do_ToolTypes, "xpos");
-			if (x)
-			{
-				const int temp = atoi(x);
-				if (temp >= 0)
-				{
-					x_pos = temp;
-				}
-			}}
-
-			{
-			STRPTR y = FindToolType(disk_object->do_ToolTypes, "ypos");
-			if (y)
-			{
-				const int temp = atoi(y);
-				if (temp >= 0)
-				{
-					y_pos = temp;
-				}
-			}}
-
-			{
-			STRPTR simple = FindToolType(disk_object->do_ToolTypes, "simple");
-			if (simple)
-			{
-				simple_mode = TRUE;
-			}}
-
-			{
-			STRPTR col = FindToolType(disk_object->do_ToolTypes, "cpucol");
-			if (col)
-			{
-				cpu_col = parse_hex(col);
-			}}
-
-			{
-			STRPTR col = FindToolType(disk_object->do_ToolTypes, "bgcol");
-			if (col)
-			{
-				bg_col = parse_hex(col);
-			}}
-
-			{
-			STRPTR col = FindToolType(disk_object->do_ToolTypes, "gmemcol");
-			if (col)
-			{
-				gfx_col = parse_hex(col);
-			}}
-
-			{
-			STRPTR col = FindToolType(disk_object->do_ToolTypes, "pmemcol");
-			if (col)
-			{
-				pub_col = parse_hex(col);
-			}}
-
-			{
-			STRPTR col = FindToolType(disk_object->do_ToolTypes, "vmemcol");
-			if (col)
-			{
-				virt_col = parse_hex(col);
-			}}
-
-			{
-			STRPTR col = FindToolType(disk_object->do_ToolTypes, "gridcol");
-			if (col)
-			{
-				grid_col = parse_hex(col);
-			}}
-
-			{
-			STRPTR col = FindToolType(disk_object->do_ToolTypes, "ulcol");
-			if (col)
-			{
-				ul_col = parse_hex(col);
-			}}
-
-			{
-			STRPTR col = FindToolType(disk_object->do_ToolTypes, "dlcol");
-			if (col)
-			{
-				dl_col = parse_hex(col);
-			}}
+			set_int(disk_object, "xpos", &x_pos);
+			set_int(disk_object, "ypos", &y_pos);
+			
+			set_bool(disk_object, "simple", (BOOL *)&simple_mode);
+			
+			set_color(disk_object, "cpucol", &cpu_col);
+			set_color(disk_object, "bgcol", &bg_col);
+			set_color(disk_object, "gmemcol", &gfx_col);
+			set_color(disk_object, "pmemcol", &pub_col);
+			set_color(disk_object, "vmemcol", &virt_col);
+			set_color(disk_object, "gridcol", &grid_col);
+			set_color(disk_object, "ulcol", &ul_col);
+			set_color(disk_object, "dlcol", &dl_col);
 
 			FreeDiskObject(disk_object);
 		}
@@ -703,7 +531,7 @@ static void my_free(void *ptr)
 static struct Window *open_window(Context *ctx, int x, int y)
 {
 	return OpenWindowTags( NULL,
-		WA_Title, "CPU Watcher",
+		//WA_Title, "CPU Watcher",
 		WA_Left, x,
 		WA_Top, y,
 		WA_InnerWidth, XSIZE,
@@ -749,6 +577,19 @@ static BOOL allocate_resources(Context *ctx)
 	
 	if ( ! ctx->bm ) {
 		printf("Couln't allocate bitmap\n");
+		goto clean;
+	}
+
+	APTR lock = LockBitMapTags( ctx->bm,
+		LBM_BaseAddress, &ctx->base_address,
+		LBM_BytesPerRow, &ctx->bytes_per_row,
+		TAG_DONE );
+
+	if ( lock ) {
+		ctx->lpr = ctx->bytes_per_row / 4;
+		UnlockBitMap(lock);
+	} else {
+		printf("Lock failed\n");
 		goto clean;
 	}
 
@@ -891,12 +732,12 @@ static void handle_window_events(Context *ctx)
 
 					window = open_window(ctx, x, y);
 
-					if ( !window ) {
-						printf("Panic - can't reopen window!\n");
-						running = FALSE;
-					} else {
+					if (window) {
 						ActivateWindow( window );
 						update = TRUE;
+					} else {
+						printf("Panic - can't reopen window!\n");
+						running = FALSE;
 					}
 					break;
 
@@ -1115,10 +956,6 @@ static void init_context(Context *ctx)
 
 static void main_loop(Context *ctx)
 {
-	// Reset idle time
-	//idle_time.Seconds = 0;
-	//idle_time.Microseconds = 0;
-
 	while ( running ) {
 		ULONG sigs = Wait( SIGBREAKF_CTRL_C | 1L << ctx->timer_port->mp_SigBit | 1L << window->UserPort->mp_SigBit);
 
@@ -1136,7 +973,7 @@ static void main_loop(Context *ctx)
 	}
 }
 
-BOOL sync_to_idler_task(Context *ctx)
+static BOOL sync_to_idler_task(Context *ctx)
 {
 	BOOL result = FALSE;
 
@@ -1180,6 +1017,7 @@ int main(int argc, char ** argv)
 	init_netstats();
 
 	start_timer(&ctx);
+
 	main_loop(&ctx);
 
 	stop_timer(&ctx);
