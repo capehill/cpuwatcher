@@ -96,7 +96,7 @@ static ULONG ul_col = UL_COL;
 static ULONG show_bits = SHOW_CPU | SHOW_GRID | SHOW_PMEM | SHOW_VMEM | SHOW_GMEM | SOLID_DRAW | DRAGBAR;
 
 extern struct Library *GfxBase;
-struct TimerIFace *ITimer;
+struct TimerIFace *ITimer = NULL;
 
 // Graph data
 static UBYTE *cpu;
@@ -114,7 +114,7 @@ static BYTE main_sig = -1;
 static struct Window *window = NULL;
 
 // Main task's address
-static struct Task *main_task;
+static struct Task *main_task = NULL;
 
 // Corresponds to seconds ran
 static ULONG iter = 0;
@@ -126,10 +126,11 @@ static volatile BOOL running = TRUE;
 static volatile BOOL simple_mode = FALSE;
 
 // How many times idle task was ran during 1 second. Run count 0 means 100% cpu usage, 100 means 0 % CPU usage
-static ULONG run_count = 0;
+static volatile ULONG run_count = 0;
 
 // For keeping book of time
-static struct TimeVal idle_start, idle_finish, idle_time;
+static struct TimeVal idle_start, idle_finish;
+static volatile struct TimeVal idle_time;
 
 typedef struct {
 	struct BitMap *bm;
@@ -245,15 +246,15 @@ die:
 
 	if (idle_sig != -1 ) {
 		FreeSignal( idle_sig );
+		idle_sig = -1;
+	}
+
+	if (pause_req) {
+		FreeSysObject(ASOT_IOREQUEST, pause_req);
 	}
 
 	if (idle_port) {
 		FreeSysObject(ASOT_PORT, idle_port);
-	}
-
-	if (pause_req)
-	{
-		FreeSysObject(ASOT_IOREQUEST, pause_req);
 	}
 
 	// Tell the main task that we can leave now (error flag may be set!)
@@ -687,19 +688,35 @@ static void handle_args(int argc, char ** argv)
 	}
 }
 
-void *my_alloc(size_t size)
+static void *my_alloc(size_t size)
 {
 	return AllocVecTags(size,
 	 	AVT_ClearWithValue, 0,
 		TAG_DONE);
 }
 
-void my_free(void *ptr)
+static void my_free(void *ptr)
 {
 	FreeVec(ptr);
 }
 
-BOOL allocate_resources(Context *ctx)
+static struct Window *open_window(Context *ctx, int x, int y)
+{
+	return OpenWindowTags( NULL,
+		WA_Title, "CPU Watcher",
+		WA_Left, x,
+		WA_Top, y,
+		WA_InnerWidth, XSIZE,
+		WA_InnerHeight, (show_bits & SHOW_NET) ? 2 * YSIZE : YSIZE,
+		WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_VANILLAKEY /*| IDCMP_CHANGEWINDOW*/,
+		WA_CloseGadget, (show_bits & DRAGBAR) ? TRUE : FALSE,
+		WA_DragBar, (show_bits & DRAGBAR) ? TRUE : FALSE,
+		WA_DepthGadget, (show_bits & DRAGBAR) ? TRUE : FALSE,
+		WA_UserPort, ctx->user_port,
+		TAG_DONE );
+}
+
+static BOOL allocate_resources(Context *ctx)
 {
 	BOOL result = FALSE;
 
@@ -774,6 +791,13 @@ BOOL allocate_resources(Context *ctx)
 		printf("Couldn't get Timer interface\n");
 		goto clean;
 	}
+
+	window = open_window(ctx, x_pos, y_pos);
+
+	if ( ! window ) {
+		printf("Couldn't open window\n");
+		goto clean;
+	}
 	
 	ctx->idle_task = CreateTaskTags("Uuno", 0, idler, 4096,
 		AT_Param1, ctx,
@@ -781,23 +805,6 @@ BOOL allocate_resources(Context *ctx)
 
 	if ( !ctx->idle_task ) {
 		printf("Couldn't create idler task\n");
-		goto clean;
-	}
-
-	window = OpenWindowTags( NULL,
-		WA_Left, x_pos,
-		WA_Top, y_pos,
-		WA_InnerWidth, XSIZE,
-		WA_InnerHeight, (show_bits & SHOW_NET) ? 2 * YSIZE : YSIZE,
-		WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_VANILLAKEY | IDCMP_CHANGEWINDOW,
-		WA_CloseGadget, (show_bits & DRAGBAR) ? TRUE : FALSE,
-		WA_DragBar, (show_bits & DRAGBAR) ? TRUE : FALSE,
-		WA_DepthGadget, (show_bits & DRAGBAR) ? TRUE : FALSE,
-		WA_UserPort, ctx->user_port,
-		TAG_DONE );
-
-	if ( ! window ) {
-		printf("Couldn't open window\n");
 		goto clean;
 	}
 
@@ -815,9 +822,6 @@ static void handle_window_events(Context *ctx)
 	{
 		const ULONG Class = msg->Class;
 		const UWORD Code = msg->Code;
-
-		const ULONG seconds = msg->Seconds;
-		const ULONG micros = msg->Micros;
 
 		ReplyMsg( (struct Message *) msg );
 
@@ -883,19 +887,9 @@ static void handle_window_events(Context *ctx)
 					const WORD y = window->TopEdge;
 
 					// Window is using WA_UserPort, so CloseWindow() will do CloseWindowSafely()
-					CloseWindow( window );
+					CloseWindow(window);
 
-					window = OpenWindowTags( NULL,
-						WA_Left, x,
-						WA_Top, y,
-						WA_InnerWidth, XSIZE,
-						WA_InnerHeight, (show_bits & SHOW_NET) ? 2 * YSIZE : YSIZE,
-						WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_VANILLAKEY | IDCMP_CHANGEWINDOW,
-						WA_CloseGadget, (show_bits & DRAGBAR) ? TRUE : FALSE,
-						WA_DragBar, (show_bits & DRAGBAR) ? TRUE : FALSE,
-						WA_DepthGadget, (show_bits & DRAGBAR) ? TRUE : FALSE,
-						WA_UserPort, ctx->user_port,
-						TAG_DONE );
+					window = open_window(ctx, x, y);
 
 					if ( !window ) {
 						printf("Panic - can't reopen window!\n");
@@ -912,22 +906,81 @@ static void handle_window_events(Context *ctx)
 
 				default:
 					break;
-			};
+			}
 
-			if ( update ) {
+			if (update) {
 				refresh_window(ctx);
             }
-		} else if ( Class == IDCMP_CHANGEWINDOW ) {
-			// Work-around for queued window move events, causes blinking in solid window move mode!
-			static ULONG last_time = 0;
-
-			if (last_time + 500000 > seconds * 1000000 + micros ) {
-
-			} else {
-				last_time = seconds * 1000000 + micros;
-			}
 		}
 	}
+}
+
+static UBYTE clamp100(UBYTE value)
+{
+	if (value > 100) {
+		//printf("%d\n", value);
+		value = 100;
+	}
+
+	return value;
+}
+
+static void measure_cpu(Context *ctx)
+{
+	UBYTE value = 100;
+
+	if (simple_mode) {
+		value -= run_count;
+
+		run_count = 0;
+		//printf("value %d %ld\n", value, run_count);
+	} else {
+		value -= 100 * (idle_time.Seconds * 1000000 + idle_time.Microseconds) / 1000000.0f;
+
+		idle_time.Seconds = 0;
+	    idle_time.Microseconds = 0;
+	}
+
+	cpu[ iter ] = clamp100(value);
+}
+
+static void measure_memory(Context *ctx)
+{
+	UBYTE value = 100 * (float) AvailMem( MEMF_PUBLIC ) / AvailMem(MEMF_PUBLIC|MEMF_TOTAL);
+
+	pub_mem[iter] = clamp100(value);
+
+	value = 100 * (float) AvailMem( MEMF_VIRTUAL ) / AvailMem(MEMF_VIRTUAL|MEMF_TOTAL);
+
+	virt_mem[iter] = clamp100(value);
+
+	uint64 total_vid, free_vid;
+
+	if (GetBoardDataTags(0, GBD_TotalMemory, &total_vid, GBD_FreeMemory, &free_vid, TAG_DONE) == 2) {
+		value = 100.0 * free_vid / total_vid;
+
+		gfx_mem[iter] = clamp100(value);
+	} else {
+		gfx_mem[iter] = 0;
+	}
+}
+
+static void measure_network(Context *ctx, float *dl_speed, float *ul_speed)
+{
+	float dl_mult = 1.0f, ul_mult = 1.0f;
+	UBYTE dl_p, ul_p;
+
+	if ( update_netstats( &dl_p, &ul_p, &dl_mult, &ul_mult, dl_speed, ul_speed ) ) {
+		
+		UWORD i;
+		for ( i = 0; i < XSIZE; i++ ) {
+			download[i] *= dl_mult;
+			upload[i] *= ul_mult;
+		}
+	}
+
+	download[iter] = dl_p;
+	upload[iter] = ul_p;
 }
 
 static void handle_timer_events(Context *ctx)
@@ -954,66 +1007,21 @@ static void handle_timer_events(Context *ctx)
 	// Timer signal, update visuals once per second
 	//if ( (++count % FREQ) == 0)
 	{
-		UBYTE value = 100;
+    	// Down/Up load speed in Kilobytes
+	    float dl_speed = 0, ul_speed = 0;
 
-		if ( simple_mode ) {
-			value -= run_count;
-			//printf("value %d %ld\n", value, run_count);
-		} else {
-			value -= 100 * (idle_time.Seconds * 1000000 + idle_time.Microseconds) / (float) 1000000;
-		}
+		++iter;
+		iter %= XSIZE;
 
-		// Reset idle time
-		idle_time.Seconds = 0;
-		idle_time.Microseconds = 0;
-		run_count = 0;
-
-		if ( value > 100 ) value = 100;
-		cpu[ ++iter % XSIZE ] = value;
-
-		// Query free memory
-        value = 100 * (float) AvailMem( MEMF_PUBLIC ) / AvailMem(MEMF_PUBLIC|MEMF_TOTAL);
-        if ( value > 100 ) value = 100;
-		pub_mem[ iter % XSIZE ] = value;
-
-		value = 100 * (float) AvailMem( MEMF_VIRTUAL ) / AvailMem(MEMF_VIRTUAL|MEMF_TOTAL);
-        if ( value > 100 ) value = 100;
-		virt_mem[ iter % XSIZE ] = value;
-
-		uint64 total, free;
-		
-		if (GetBoardDataTags(0, GBD_TotalMemory, &total, GBD_FreeMemory, &free, TAG_DONE) == 2) {
-			value = 100.0 * free / total;
-	        if ( value > 100 ) value = 100;
-			gfx_mem[ iter % XSIZE ] = value;
-		} else {
-			gfx_mem[ iter % XSIZE ] = 0;
-		}
-
-		//
-		// Network traffic
-		//
-
-		// Down/Up load speed in Kilobytes
-		float dl_speed = 0, ul_speed = 0;
-
-		float dl_mult = 1.0f, ul_mult = 1.0f;
-		UBYTE dl_p, ul_p;
-
-		if ( update_netstats( &dl_p, &ul_p, &dl_mult, &ul_mult, &dl_speed, &ul_speed ) ) {
-			UWORD i;
-			for ( i = 0; i < XSIZE; i++ ) {
-				download[ i ] *= dl_mult;
-				upload[ i ] *= ul_mult;
-			}
-		}
-
-		download[ iter % XSIZE ] = dl_p;
-		upload[ iter % XSIZE ] = ul_p;
+		measure_cpu(ctx);
+		measure_memory(ctx);
+		measure_network(ctx, &dl_speed, &ul_speed);
 
   		// Update window (if dragbar) & screen titles too
-		sprintf( w_title_string, w_format, cpu[ iter % XSIZE ], virt_mem[ iter % XSIZE ], pub_mem[ iter % XSIZE ], gfx_mem[ iter % XSIZE ] );
-		sprintf( s_title_string, s_format, cpu[ iter % XSIZE ], virt_mem[ iter % XSIZE ], pub_mem[ iter % XSIZE ], gfx_mem[ iter % XSIZE ], dl_speed, ul_speed, simple_mode ? 'S' : 'B' );
+		sprintf( w_title_string, w_format, cpu[iter], virt_mem[iter], pub_mem[iter], gfx_mem[iter] );
+		sprintf( s_title_string, s_format, cpu[iter], virt_mem[iter], pub_mem[iter], gfx_mem[iter],
+		    dl_speed, ul_speed, simple_mode ? 'S' : 'B' );
+
 		SetWindowTitles( window, (show_bits & DRAGBAR) ? w_title_string : NULL, s_title_string );
 
 		refresh_window(ctx);
@@ -1158,11 +1166,11 @@ int main(int argc, char ** argv)
 
 	handle_args(argc, argv);
 
+	main_task = FindTask( NULL );
+
 	if (allocate_resources(&ctx) == FALSE) {
 		goto clean;
 	}
-
-	main_task = FindTask( NULL );
 
 	if (sync_to_idler_task(&ctx) == FALSE) {
 		goto clean;
