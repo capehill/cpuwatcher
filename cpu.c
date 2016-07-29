@@ -8,7 +8,6 @@ CPU Watcher 0.6 by Juha Niemimäki (c) 2005 - 2016
 Special thanks to Thomas Frieden, Olaf Barthel, Alex Carmona and Dave Fisher.
 
 TODO:
-- tooltype support
 - prefs editor
 
 Change log:
@@ -96,9 +95,7 @@ static ULONG bg_col = BG_COL;
 static ULONG dl_col = DL_COL;
 static ULONG ul_col = UL_COL;
 
-// This set of flags controls which graphs are drawn
-static ULONG show_bits = SHOW_CPU | SHOW_GRID | SHOW_PMEM | SHOW_VMEM | SHOW_GMEM | SOLID_DRAW | DRAGBAR;
-
+//extern struct Library *SysBase;
 extern struct Library *GfxBase;
 struct TimerIFace *ITimer = NULL;
 
@@ -110,48 +107,51 @@ static UBYTE *gfx_mem;
 static UBYTE *upload;
 static UBYTE *download;
 
-// Signals for inter-process synchronization
-static BYTE idle_sig = -1;
-static BYTE main_sig = -1;
-
-// Graph window
-static struct Window *window = NULL;
-
-// Main task's address
-static struct Task *main_task = NULL;
-
-// Corresponds to seconds ran
-static ULONG iter = 0;
-
-// "Volatile" to avoid clever optimizer walking over me. Program runs as long as flag is set.
-static volatile BOOL running = TRUE;
-
-// Simple mode switches to non-busy looping option when measuring the CPU usage.
-static volatile BOOL simple_mode = FALSE;
-
-// How many times idle task was ran during 1 second. Run count 0 means 100% cpu usage, 100 means 0 % CPU usage
-static volatile ULONG run_count = 0;
-
-// For keeping book of time
-static struct TimeVal idle_start, idle_finish;
+static struct TimeVal idle_start;
+static struct TimeVal idle_finish;
 static volatile struct TimeVal idle_time;
 
 typedef struct {
+	struct Window *window;
 	struct BitMap *bm;
-	struct MsgPort *timer_port, *user_port;
+	struct MsgPort *timer_port;
+	struct MsgPort *user_port;
+
+	struct Task *main_task;
 	struct Task *idle_task;
+
+	BYTE idle_sig;
+	BYTE main_sig;
+
 	struct TimeRequest *timer_req;
+	
 	BYTE timer_device;
 	struct TimeVal tv;
+	
 	APTR base_address;
 	uint32 bytes_per_row;
 	uint32 lpr;
+	
+	// This set of flags controls which graphs are drawn
+	ULONG show_bits;
+
+	int x_pos;
+	int y_pos;
+
+     // Corresponds to seconds ran
+	ULONG iter;
+
+	volatile BOOL running;
+
+	volatile BOOL idler_trouble;
+
+    // Simple mode switches to non-busy looping option when measuring the CPU usage.
+	volatile BOOL simple_mode;
+
+    // How many times idle task was ran during 1 second. Run count 0 means 100% cpu usage, 100 means 0 % CPU usage
+	volatile ULONG run_count;
+
 } Context;
-
-static int x_pos = 0;
-static int y_pos = 0;
-
-static BOOL idler_trouble = FALSE;
 
 // network.c
 void init_netstats(void);
@@ -186,7 +186,7 @@ static void idler(uint32 p1)
 		TAG_DONE);
 	
 	if (!idle_port) {
-		idler_trouble = TRUE;
+		ctx->idler_trouble = TRUE;
 		goto die;
 	}
 
@@ -197,24 +197,24 @@ static void idler(uint32 p1)
 		TAG_DONE);
 
 	if (!pause_req) {
-		idler_trouble = TRUE;
+		ctx->idler_trouble = TRUE;
 		goto die;
 	}
 
-	idle_sig = AllocSignal(-1);
+	ctx->idle_sig = AllocSignal(-1);
 
-	if (idle_sig == -1) {
-		idler_trouble = TRUE;
+	if (ctx->idle_sig == -1) {
+		ctx->idler_trouble = TRUE;
 		goto die;
 	}
 
 	// Signal main task that we are ready
-	Signal( main_task, 1L << main_sig );
+	Signal(ctx->main_task, 1L << ctx->main_sig);
 
 	// Wait for main task
-	Wait( 1L << idle_sig );
+	Wait(1L << ctx->idle_sig);
 
-	struct Task *me = FindTask(NULL);
+	struct Task *me = FindTask(NULL); // ctx->idle_task also...
 
 	Forbid();
 	me->tc_Switch = my_switch;
@@ -225,20 +225,24 @@ static void idler(uint32 p1)
 	// Use minimum priority
 	SetTaskPri( me, -127 );
 
-	while ( running ) {
-		if ( simple_mode ) {
-			struct TimeVal tv;
-
-			run_count++;
-
-			GetSysTime( &tv );
-
+	while ( ctx->running ) {
+		if ( ctx->simple_mode ) {
  			// When in "Simple" mode, pause for 1/100th of second
-			tv.Microseconds += 10000; // 100 Hz
+
+			struct TimeVal dest, source;
+
+			ctx->run_count++;
+
+			GetSysTime( &dest );
+
+			source.Seconds = 0;
+			source.Microseconds = 10000;
+
+			AddTime(&dest, &source);
 
 			pause_req->Request.io_Command = TR_ADDREQUEST;
-			pause_req->Time.Seconds = tv.Seconds;
-			pause_req->Time.Microseconds = tv.Microseconds;
+			pause_req->Time.Seconds = dest.Seconds;
+			pause_req->Time.Microseconds = dest.Microseconds;
 
 			DoIO( (struct IORequest *) pause_req );
 		}
@@ -252,9 +256,9 @@ static void idler(uint32 p1)
 
 die:
 
-	if (idle_sig != -1 ) {
-		FreeSignal( idle_sig );
-		idle_sig = -1;
+	if (ctx->idle_sig != -1 ) {
+		FreeSignal( ctx->idle_sig );
+		ctx->idle_sig = -1;
 	}
 
 	if (pause_req) {
@@ -266,7 +270,7 @@ die:
 	}
 
 	// Tell the main task that we can leave now (error flag may be set!)
-	Signal(main_task, 1L << main_sig);
+	Signal(ctx->main_task, 1L << ctx->main_sig);
 
 	// Waiting for termination
 	Wait( 0L );
@@ -278,14 +282,14 @@ static void plot(Context *ctx, const UBYTE* const array, const ULONG color)
 
 	WORD x, y;
 	for ( x=0; x < XSIZE; x++ ) {
-		UBYTE cur_y = array[ (iter+1 + x) % XSIZE ];
+		UBYTE cur_y = array[ (ctx->iter+1 + x) % XSIZE ];
 
 		// Plot the current dot
 		*(ptr + x + (YSIZE - 1 - cur_y) * ctx->lpr ) = color;
 
 		// Make the plotted line solid
-		if ( show_bits & SOLID_DRAW ) {
-		    UBYTE prev_y = array[ (iter + x) % XSIZE ];
+		if ( ctx->show_bits & SOLID_DRAW ) {
+			UBYTE prev_y = array[ (ctx->iter + x) % XSIZE ];
 			WORD diff = cur_y - prev_y;
 
 			if ( x > 0 && diff != 0 ) {
@@ -314,7 +318,7 @@ static void plot_net(Context *ctx)
 
 	for ( x = 0; x < XSIZE; x++ ) {
 		// Upload, above the center line
-		WORD start_y = - upload[ (iter + 1 + x) % XSIZE ] / 2;
+		WORD start_y = - upload[ (ctx->iter + 1 + x) % XSIZE ] / 2;
 		ULONG *_ptr = ptr + x + ( YSIZE / 2 + start_y) * ctx->lpr;
 
 		for ( y = start_y; y < 0; y++ ) {
@@ -323,7 +327,7 @@ static void plot_net(Context *ctx)
 		}
 
 		// Download, below the center line
-		WORD end_y = download[ (iter + 1 + x) % XSIZE] / 2;
+		WORD end_y = download[ (ctx->iter + 1 + x) % XSIZE] / 2;
 		_ptr = ptr + x + (YSIZE / 2 + 1) * ctx->lpr;
 
 		for ( y = 1 ; y <= end_y; y++ ) {
@@ -337,7 +341,7 @@ static void clear(Context *ctx)
 {
 	ULONG *ptr = ctx->base_address;
 
-	WORD height = window->Height - (window->BorderBottom + window->BorderTop);
+	WORD height = ctx->window->Height - (ctx->window->BorderBottom + ctx->window->BorderTop);
 	WORD x, y;
 
 	for (y = 0; y < height; y++) {
@@ -354,7 +358,7 @@ static void draw_grid(Context *ctx)
     ULONG *ptr = ctx->base_address;
 	WORD x, y;
 
-	int total_height = (show_bits & SHOW_NET) ? 2 * YSIZE : YSIZE;
+	int total_height = (ctx->show_bits & SHOW_NET) ? 2 * YSIZE : YSIZE;
 
 	// Horizontal lines
 	for ( y = 0; y < total_height; y += 10 ) {
@@ -381,34 +385,37 @@ static void refresh_window(Context *ctx)
 {
 	clear(ctx);
 
-	if ( show_bits & SHOW_GRID ) {
+	if ( ctx->show_bits & SHOW_GRID ) {
 		draw_grid(ctx);
 	}
 
-	if ( show_bits & SHOW_PMEM ) {
+	if ( ctx->show_bits & SHOW_PMEM ) {
 		plot(ctx, pub_mem, pub_col );
 	}
 
-	if ( show_bits & SHOW_VMEM ) {
+	if ( ctx->show_bits & SHOW_VMEM ) {
 		plot(ctx, virt_mem, virt_col );
 	}
 
-	if ( show_bits & SHOW_GMEM ) {
+	if ( ctx->show_bits & SHOW_GMEM ) {
 		plot(ctx, gfx_mem, gfx_col );
 	}
 
-	if ( show_bits & SHOW_CPU ) {
+	if ( ctx->show_bits & SHOW_CPU ) {
 		plot(ctx, cpu, cpu_col );
 	}
 
-	if ( show_bits & SHOW_NET ) {
+	if ( ctx->show_bits & SHOW_NET ) {
 		plot_net(ctx);
 	}
 
-	BltBitMapRastPort(ctx->bm, 0, 0, window->RPort, window->BorderLeft, window->BorderTop,
-		window->Width - (window->BorderRight + window->BorderLeft),
-		window->Height - (window->BorderBottom + window->BorderTop),
-		0xC0 );
+	BltBitMapRastPort(ctx->bm, 0, 0,
+		ctx->window->RPort,
+		ctx->window->BorderLeft,
+		ctx->window->BorderTop,
+		ctx->window->Width - (ctx->window->BorderRight + ctx->window->BorderLeft),
+		ctx->window->Height - (ctx->window->BorderBottom + ctx->window->BorderTop),
+		0xC0);
 }
 
 static ULONG parse_hex(STRPTR str)
@@ -416,14 +423,14 @@ static ULONG parse_hex(STRPTR str)
 	return strtol(str, NULL, 16);
 }
 
-static void set_bit(struct DiskObject *disk_object, STRPTR name, int bit)
+static void set_bit(struct DiskObject *disk_object, STRPTR name, Context *ctx, int bit)
 {
 	STRPTR tool_type = FindToolType(disk_object->do_ToolTypes, name);
 	
 	if (tool_type) {
 		//if (MatchToolValue(cpu, "True"))
 		{
-			show_bits |= bit;
+			ctx->show_bits |= bit;
 		}
 	}
 }
@@ -459,7 +466,7 @@ static void set_color(struct DiskObject *disk_object, STRPTR name, ULONG *value)
 	}
 }
 
-static void read_config(STRPTR file_name)
+static void read_config(Context *ctx, STRPTR file_name)
 {
 	if (file_name) {
 
@@ -467,22 +474,22 @@ static void read_config(STRPTR file_name)
 		
 		if (disk_object) {
 
-			show_bits = 0;
+			ctx->show_bits = 0;
 
-			set_bit(disk_object, "cpu", SHOW_CPU);
-			set_bit(disk_object, "grid", SHOW_GRID);
-			set_bit(disk_object, "pmem", SHOW_PMEM);
-			set_bit(disk_object, "vmem", SHOW_VMEM);
-			set_bit(disk_object, "gmem", SHOW_GMEM);
-			set_bit(disk_object, "solid", SOLID_DRAW);
-			set_bit(disk_object, "transparent", TRANSPARENT);
-			set_bit(disk_object, "net", SHOW_NET);
-			set_bit(disk_object, "dragbar", DRAGBAR);
+			set_bit(disk_object, "cpu", ctx, SHOW_CPU);
+			set_bit(disk_object, "grid", ctx, SHOW_GRID);
+			set_bit(disk_object, "pmem", ctx, SHOW_PMEM);
+			set_bit(disk_object, "vmem", ctx, SHOW_VMEM);
+			set_bit(disk_object, "gmem", ctx, SHOW_GMEM);
+			set_bit(disk_object, "solid", ctx, SOLID_DRAW);
+			set_bit(disk_object, "transparent", ctx, TRANSPARENT);
+			set_bit(disk_object, "net", ctx, SHOW_NET);
+			set_bit(disk_object, "dragbar", ctx, DRAGBAR);
 
-			set_int(disk_object, "xpos", &x_pos);
-			set_int(disk_object, "ypos", &y_pos);
+			set_int(disk_object, "xpos", &ctx->x_pos);
+			set_int(disk_object, "ypos", &ctx->y_pos);
 			
-			set_bool(disk_object, "simple", (BOOL *)&simple_mode);
+			set_bool(disk_object, "simple", (BOOL *)&ctx->simple_mode);
 			
 			set_color(disk_object, "cpucol", &cpu_col);
 			set_color(disk_object, "bgcol", &bg_col);
@@ -498,7 +505,7 @@ static void read_config(STRPTR file_name)
 	}
 }
 
-static void handle_args(int argc, char ** argv)
+static void handle_args(Context *ctx, int argc, char ** argv)
 {
 	if (! argc) {
 		struct WBStartup * wb_startup = (struct WBStartup *) argv;
@@ -507,12 +514,12 @@ static void handle_args(int argc, char ** argv)
 		if (wb_arg /*&& wb_arg->wa_Lock*/) {
 			//BPTR old_dir = GetCurrentDir(/*wb_arg->wa_Lock*/);
 
-			read_config(wb_arg->wa_Name);
+			read_config(ctx, wb_arg->wa_Name);
 
 			//CurrentDir(old_dir);
 		}
 	} else {
-		read_config(argv[0]);
+		read_config(ctx, argv[0]);
 	}
 }
 
@@ -535,11 +542,11 @@ static struct Window *open_window(Context *ctx, int x, int y)
 		WA_Left, x,
 		WA_Top, y,
 		WA_InnerWidth, XSIZE,
-		WA_InnerHeight, (show_bits & SHOW_NET) ? 2 * YSIZE : YSIZE,
+		WA_InnerHeight, (ctx->show_bits & SHOW_NET) ? 2 * YSIZE : YSIZE,
 		WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_VANILLAKEY /*| IDCMP_CHANGEWINDOW*/,
-		WA_CloseGadget, (show_bits & DRAGBAR) ? TRUE : FALSE,
-		WA_DragBar, (show_bits & DRAGBAR) ? TRUE : FALSE,
-		WA_DepthGadget, (show_bits & DRAGBAR) ? TRUE : FALSE,
+		WA_CloseGadget, (ctx->show_bits & DRAGBAR) ? TRUE : FALSE,
+		WA_DragBar, (ctx->show_bits & DRAGBAR) ? TRUE : FALSE,
+		WA_DepthGadget, (ctx->show_bits & DRAGBAR) ? TRUE : FALSE,
 		WA_UserPort, ctx->user_port,
 		TAG_DONE );
 }
@@ -548,9 +555,9 @@ static BOOL allocate_resources(Context *ctx)
 {
 	BOOL result = FALSE;
 
-	main_sig = AllocSignal( -1 );
+	ctx->main_sig = AllocSignal( -1 );
 
-	if ( main_sig == -1 ) {
+	if ( ctx->main_sig == -1 ) {
 		printf("Couldn't allocate signal\n");
 		goto clean;
 	}
@@ -633,9 +640,9 @@ static BOOL allocate_resources(Context *ctx)
 		goto clean;
 	}
 
-	window = open_window(ctx, x_pos, y_pos);
+	ctx->window = open_window(ctx, ctx->x_pos, ctx->y_pos);
 
-	if ( ! window ) {
+	if ( ! ctx->window ) {
 		printf("Couldn't open window\n");
 		goto clean;
 	}
@@ -659,7 +666,7 @@ clean:
 static void handle_window_events(Context *ctx)
 {
 	struct IntuiMessage *msg;
-	while ( (msg = (struct IntuiMessage *) GetMsg( window->UserPort ) ) )
+	while ( (msg = (struct IntuiMessage *) GetMsg( ctx->window->UserPort ) ) )
 	{
 		const ULONG Class = msg->Class;
 		const UWORD Code = msg->Code;
@@ -667,82 +674,82 @@ static void handle_window_events(Context *ctx)
 		ReplyMsg( (struct Message *) msg );
 
 		if ( Class == IDCMP_CLOSEWINDOW ) {
-		 	running = FALSE;
+			ctx->running = FALSE;
 		} else if ( Class == IDCMP_VANILLAKEY ) {
 			BOOL update = FALSE;
 
 			switch ( Code ) {
 				case 'c':
-					show_bits ^= SHOW_CPU;
+					ctx->show_bits ^= SHOW_CPU;
 					update = TRUE;
 					break;
 
 				case 'p':
-					show_bits ^= SHOW_PMEM;
+					ctx->show_bits ^= SHOW_PMEM;
 					update = TRUE;
 					break;
 
 				case 'v':
-					show_bits ^= SHOW_VMEM;
+					ctx->show_bits ^= SHOW_VMEM;
 					update = TRUE;
 					break;
 
 				case 'x':
-					show_bits ^= SHOW_GMEM;
+					ctx->show_bits ^= SHOW_GMEM;
 					update = TRUE;
 					break;
 
 				case 'g':
-					show_bits ^= SHOW_GRID;
+					ctx->show_bits ^= SHOW_GRID;
 					update = TRUE;
 					break;
 
 				case 's':
-					show_bits ^= SOLID_DRAW;
+					ctx->show_bits ^= SOLID_DRAW;
 					update = TRUE;
 					break;
 
 				case 't':
-					show_bits ^= TRANSPARENT;
+					ctx->show_bits ^= TRANSPARENT;
 					update = TRUE;
-					if ( show_bits & TRANSPARENT) {
+					if ( ctx->show_bits & TRANSPARENT) {
 						//TODO
 					}
 					break;
 
 				case 'm':
-					simple_mode ^= TRUE;
+					ctx->simple_mode ^= TRUE;
 					break;
 
 				case 'n':
-					show_bits ^= SHOW_NET;
-					SizeWindow(window, 0, (show_bits & SHOW_NET) ? YSIZE : -YSIZE);
+					ctx->show_bits ^= SHOW_NET;
+					SizeWindow(ctx->window, 0, (ctx->show_bits & SHOW_NET) ? YSIZE : -YSIZE);
 					update = TRUE;
 					break;
 
 				case 'd':
-					show_bits ^= DRAGBAR;
+					ctx->show_bits ^= DRAGBAR;
 
 					// Store old coordinates
-					const WORD x = window->LeftEdge;
-					const WORD y = window->TopEdge;
+					const WORD x = ctx->window->LeftEdge;
+					const WORD y = ctx->window->TopEdge;
 
 					// Window is using WA_UserPort, so CloseWindow() will do CloseWindowSafely()
-					CloseWindow(window);
+					CloseWindow(ctx->window);
 
-					window = open_window(ctx, x, y);
+					ctx->window = open_window(ctx, x, y);
 
-					if (window) {
-						ActivateWindow( window );
+					if (ctx->window) {
+						ActivateWindow( ctx->window );
 						update = TRUE;
 					} else {
 						printf("Panic - can't reopen window!\n");
-						running = FALSE;
+						ctx->running = FALSE;
 					}
 					break;
 
 				case 'q':
-					running = FALSE;
+					ctx->running = FALSE;
 					break;
 
 				default:
@@ -770,11 +777,10 @@ static void measure_cpu(Context *ctx)
 {
 	UBYTE value = 100;
 
-	if (simple_mode) {
-		value -= run_count;
+	if (ctx->simple_mode) {
+		value -= ctx->run_count;
 
-		run_count = 0;
-		//printf("value %d %ld\n", value, run_count);
+		ctx->run_count = 0;
 	} else {
 		value -= 100 * (idle_time.Seconds * 1000000 + idle_time.Microseconds) / 1000000.0f;
 
@@ -782,27 +788,31 @@ static void measure_cpu(Context *ctx)
 	    idle_time.Microseconds = 0;
 	}
 
-	cpu[ iter ] = clamp100(value);
+	cpu[ ctx->iter ] = clamp100(value);
 }
 
 static void measure_memory(Context *ctx)
 {
 	UBYTE value = 100 * (float) AvailMem( MEMF_PUBLIC ) / AvailMem(MEMF_PUBLIC|MEMF_TOTAL);
 
-	pub_mem[iter] = clamp100(value);
+	pub_mem[ctx->iter] = clamp100(value);
 
 	value = 100 * (float) AvailMem( MEMF_VIRTUAL ) / AvailMem(MEMF_VIRTUAL|MEMF_TOTAL);
 
-	virt_mem[iter] = clamp100(value);
+	virt_mem[ctx->iter] = clamp100(value);
 
 	uint64 total_vid, free_vid;
 
-	if (GetBoardDataTags(0, GBD_TotalMemory, &total_vid, GBD_FreeMemory, &free_vid, TAG_DONE) == 2) {
+	if (GetBoardDataTags(0,
+		GBD_TotalMemory, &total_vid,
+		GBD_FreeMemory, &free_vid,
+		TAG_DONE) == 2) {
+		
 		value = 100.0 * free_vid / total_vid;
 
-		gfx_mem[iter] = clamp100(value);
+		gfx_mem[ctx->iter] = clamp100(value);
 	} else {
-		gfx_mem[iter] = 0;
+		gfx_mem[ctx->iter] = 0;
 	}
 }
 
@@ -820,8 +830,8 @@ static void measure_network(Context *ctx, float *dl_speed, float *ul_speed)
 		}
 	}
 
-	download[iter] = dl_p;
-	upload[iter] = ul_p;
+	download[ctx->iter] = dl_p;
+	upload[ctx->iter] = ul_p;
 }
 
 static void handle_timer_events(Context *ctx)
@@ -851,19 +861,19 @@ static void handle_timer_events(Context *ctx)
     	// Down/Up load speed in Kilobytes
 	    float dl_speed = 0, ul_speed = 0;
 
-		++iter;
-		iter %= XSIZE;
+		++ctx->iter;
+		ctx->iter %= XSIZE;
 
 		measure_cpu(ctx);
 		measure_memory(ctx);
 		measure_network(ctx, &dl_speed, &ul_speed);
 
   		// Update window (if dragbar) & screen titles too
-		sprintf( w_title_string, w_format, cpu[iter], virt_mem[iter], pub_mem[iter], gfx_mem[iter] );
-		sprintf( s_title_string, s_format, cpu[iter], virt_mem[iter], pub_mem[iter], gfx_mem[iter],
-		    dl_speed, ul_speed, simple_mode ? 'S' : 'B' );
+		sprintf( w_title_string, w_format, cpu[ctx->iter], virt_mem[ctx->iter], pub_mem[ctx->iter], gfx_mem[ctx->iter] );
+		sprintf( s_title_string, s_format, cpu[ctx->iter], virt_mem[ctx->iter], pub_mem[ctx->iter], gfx_mem[ctx->iter],
+			dl_speed, ul_speed, ctx->simple_mode ? 'S' : 'B' );
 
-		SetWindowTitles( window, (show_bits & DRAGBAR) ? w_title_string : NULL, s_title_string );
+		SetWindowTitles( ctx->window, (ctx->show_bits & DRAGBAR) ? w_title_string : NULL, s_title_string );
 
 		refresh_window(ctx);
    	}
@@ -890,23 +900,28 @@ static void stop_timer(Context *ctx)
 	}
 }
 
-static void free_resources(Context *ctx)
+static void wait_for_idler(Context *ctx)
 {
 	// if idler task had problems, don't wait for it
-	if ( ctx->idle_task && !idler_trouble ) {
+	if (ctx->idle_task && !ctx->idler_trouble) {
 	    // Give it some more cpu
-		SetTaskPri( ctx->idle_task, 0 );
+		SetTaskPri(ctx->idle_task, 0);
 
 	 	// Wait idler task to finish possible timer actions before closing timing services
-		Wait( 1L << main_sig | SIGBREAKF_CTRL_C );
+		Wait(1L << ctx->main_sig | SIGBREAKF_CTRL_C);
 	}
+}
+
+static void free_resources(Context *ctx)
+{
+	wait_for_idler(ctx);
 
 	if (ITimer) {
-		DropInterface( (struct Interface *) ITimer );
+		DropInterface((struct Interface *) ITimer);
 	}
 
-	if ( ctx->timer_device == 0 && ctx->timer_req ) {
-		CloseDevice( (struct IORequest *) ctx->timer_req );
+	if (ctx->timer_device == 0 && ctx->timer_req) {
+		CloseDevice((struct IORequest *) ctx->timer_req);
 	}
 
 	if (ctx->timer_req) {
@@ -917,16 +932,16 @@ static void free_resources(Context *ctx)
 		FreeSysObject(ASOT_PORT, ctx->timer_port);
 	}
 
-	if ( ctx->idle_task ) {
-		DeleteTask( ctx->idle_task );
+	if (ctx->idle_task) {
+		DeleteTask(ctx->idle_task);
 	}
 
-	if (main_sig != -1) {
-		FreeSignal( main_sig );
+	if (ctx->main_sig != -1) {
+		FreeSignal(ctx->main_sig);
 	}
 
-	if (window) {
-		CloseWindow( window );
+	if (ctx->window) {
+		CloseWindow(ctx->window);
 	}
 
 	if (ctx->user_port) {
@@ -951,24 +966,34 @@ static void init_context(Context *ctx)
 {
 	memset(ctx, 0, sizeof(Context));
 
+	ctx->main_task = FindTask(NULL);
+
+	ctx->main_sig = -1;
+	ctx->idle_sig = -1;
+
+	ctx->running = TRUE;
 	ctx->timer_device = -1;
+	ctx->show_bits = SHOW_CPU | SHOW_GRID | SHOW_PMEM | SHOW_VMEM | SHOW_GMEM | SOLID_DRAW | DRAGBAR;
 }
 
 static void main_loop(Context *ctx)
 {
-	while ( running ) {
-		ULONG sigs = Wait( SIGBREAKF_CTRL_C | 1L << ctx->timer_port->mp_SigBit | 1L << window->UserPort->mp_SigBit);
+	while ( ctx->running ) {
+		ULONG sigs = Wait(
+			SIGBREAKF_CTRL_C |
+			1L << ctx->timer_port->mp_SigBit |
+			1L << ctx->window->UserPort->mp_SigBit);
 
-		if ( sigs & (1L << ctx->timer_port->mp_SigBit) ) {
+		if (sigs & (1L << ctx->timer_port->mp_SigBit)) {
 			handle_timer_events(ctx);
 		}
 
-		if ( sigs & 1L << window->UserPort->mp_SigBit ) {
+		if (sigs & 1L << ctx->window->UserPort->mp_SigBit) {
 			handle_window_events(ctx);
 		}
 
-		if ( sigs & SIGBREAKF_CTRL_C ) {
-			running = FALSE;
+		if (sigs & SIGBREAKF_CTRL_C) {
+			ctx->running = FALSE;
 		}
 	}
 }
@@ -977,13 +1002,13 @@ static BOOL sync_to_idler_task(Context *ctx)
 {
 	BOOL result = FALSE;
 
-	Wait( 1L << main_sig );
+	Wait(1L << ctx->main_sig);
 
-	if ( idler_trouble ) {
+	if (ctx->idler_trouble) {
 		goto clean;
 	}
 
-	Signal( ctx->idle_task, 1L << idle_sig );
+	Signal(ctx->idle_task, 1L << ctx->idle_sig);
 
 	result = TRUE;
 
@@ -996,33 +1021,26 @@ int main(int argc, char ** argv)
 	Context ctx;
 	init_context(&ctx);
 
+	//printf("Quantum %d\n", ((struct ExecBase *)SysBase)->Quantum);
+
 	if (GfxBase->lib_Version < 54) {
 		printf("graphics.library V54 needed\n");
-		goto clean;
+	} else {
+		handle_args(&ctx, argc, argv);
+
+		if (allocate_resources(&ctx) && sync_to_idler_task(&ctx)) {
+
+			refresh_window(&ctx);
+
+			init_netstats();
+
+			start_timer(&ctx);
+
+			main_loop(&ctx);
+
+			stop_timer(&ctx);
+		}
 	}
-
-	handle_args(argc, argv);
-
-	main_task = FindTask( NULL );
-
-	if (allocate_resources(&ctx) == FALSE) {
-		goto clean;
-	}
-
-	if (sync_to_idler_task(&ctx) == FALSE) {
-		goto clean;
-	}
-
-	refresh_window( &ctx );
-	init_netstats();
-
-	start_timer(&ctx);
-
-	main_loop(&ctx);
-
-	stop_timer(&ctx);
-
-clean:
 
 	free_resources(&ctx);
 
