@@ -58,7 +58,7 @@ Change log:
 #include <stdlib.h>
 #include <string.h>
 
-static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.6 (28.7.2016)";
+static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.6 (30.7.2016)";
 
 #define WINDOW_TITLE_FORMAT "CPU: %3d%% V: %3d%% P: %3d%% G: %3d%%"
 #define SCREEN_TITLE_FORMAT "CPU: %3d%% Virtual: %3d%% Public: %3d%% Graphics: %3d%% Download: %4.1fKB/s Upload: %4.1fKB/s Mode: %c"
@@ -76,7 +76,7 @@ static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.6 (28.7
 #define CPU_COL 	0x0000A000 // Green
 #define PUB_COL 	0x00FF1010 // Red
 #define VIRT_COL	0x001010FF // Blue
-#define GFX_COL 	0x0010C0F0 // Brighter blue
+#define VID_COL 	0x0010C0F0 // Brighter blue
 #define GRID_COL 	0x00003000 // Dark green
 #define DL_COL      0x0000A000 // Green
 #define UL_COL      0x00FF1010 // Red
@@ -84,22 +84,24 @@ static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.6 (28.7
 
 #define SHOW_CPU 	(1L << 0) // CPU
 #define SHOW_GRID 	(1L << 1) // Grid
-#define SHOW_PMEM 	(1L << 2) // Public M
-#define SHOW_VMEM   (1L << 3) // Virtual M
-#define SHOW_GMEM   (1L << 4) // Graphics/Video M
+#define SHOW_PMEM 	(1L << 2) // Public Memory
+#define SHOW_VMEM   (1L << 3) // Virtual Memory
+#define SHOW_GMEM   (1L << 4) // Graphics/Video Memory
 #define SOLID_DRAW 	(1L << 5) // Toggles between dot/line drawing mode
 #define SHOW_NET    (1L << 6) // Net traffic graphs
 #define TRANSPARENT (1L << 7) // Pseudo tranparency
 #define DRAGBAR     (1L << 8) // Dragbar
 
-static ULONG cpu_col = CPU_COL;
-static ULONG pub_col = PUB_COL;
-static ULONG virt_col = VIRT_COL;
-static ULONG gfx_col = GFX_COL;
-static ULONG grid_col = GRID_COL;
-static ULONG bg_col = BG_COL;
-static ULONG dl_col = DL_COL;
-static ULONG ul_col = UL_COL;
+typedef struct {
+	ULONG cpu;
+	ULONG public_mem;
+	ULONG virtual_mem;
+	ULONG video_mem;
+	ULONG grid;
+	ULONG background;
+	ULONG upload;
+	ULONG download;
+} Colors;
 
 //extern struct Library *SysBase;
 extern struct Library *GfxBase;
@@ -163,6 +165,8 @@ typedef struct {
 
 	STRPTR window_title;
 	STRPTR screen_title;
+
+	Colors colors;
 
 } Context;
 
@@ -332,7 +336,7 @@ static void plot_net(Context *ctx)
 		ULONG *_ptr = ptr + x + ( YSIZE / 2 + start_y) * ctx->lpr;
 
 		for ( y = start_y; y < 0; y++ ) {
-			*_ptr = ul_col;
+			*_ptr = ctx->colors.upload;
 			_ptr += ctx->lpr;
 		}
 
@@ -341,7 +345,7 @@ static void plot_net(Context *ctx)
 		_ptr = ptr + x + (YSIZE / 2 + 1) * ctx->lpr;
 
 		for ( y = 1 ; y <= end_y; y++ ) {
-			*_ptr = dl_col;
+			*_ptr = ctx->colors.download;
 			_ptr += ctx->lpr;
 		}
 	}
@@ -356,7 +360,7 @@ static void clear(Context *ctx)
 
 	for (y = 0; y < height; y++) {
 		for (x = 0; x < XSIZE; x++) {
-			ptr[x] = bg_col;
+			ptr[x] = ctx->colors.background;
 		}
 
 		ptr += ctx->lpr;
@@ -373,7 +377,7 @@ static void draw_grid(Context *ctx)
 	// Horizontal lines
 	for ( y = 0; y < total_height; y += 10 ) {
 		for ( x = 0; x < XSIZE; x++ ) {
-			ptr[x] = grid_col;
+			ptr[x] = ctx->colors.grid;
 		}
 		ptr += 10 * ctx->lpr;
 	}
@@ -385,7 +389,7 @@ static void draw_grid(Context *ctx)
 		ULONG* _ptr = ptr + x;
 
 		for ( y = 0; y < total_height; y++ ) {
-			*_ptr = grid_col;
+			*_ptr = ctx->colors.grid;
 			_ptr += ctx->lpr;
 		}
 	}
@@ -400,19 +404,19 @@ static void refresh_window(Context *ctx)
 	}
 
 	if ( ctx->show_bits & SHOW_PMEM ) {
-		plot(ctx, pub_mem, pub_col );
+		plot(ctx, pub_mem, ctx->colors.public_mem );
 	}
 
 	if ( ctx->show_bits & SHOW_VMEM ) {
-		plot(ctx, virt_mem, virt_col );
+		plot(ctx, virt_mem, ctx->colors.virtual_mem );
 	}
 
 	if ( ctx->show_bits & SHOW_GMEM ) {
-		plot(ctx, gfx_mem, gfx_col );
+		plot(ctx, gfx_mem, ctx->colors.video_mem );
 	}
 
 	if ( ctx->show_bits & SHOW_CPU ) {
-		plot(ctx, cpu, cpu_col );
+		plot(ctx, cpu, ctx->colors.cpu );
 	}
 
 	if ( ctx->show_bits & SHOW_NET ) {
@@ -501,14 +505,14 @@ static void read_config(Context *ctx, STRPTR file_name)
 				
 			set_bool(disk_object, "simple", (BOOL *)&ctx->simple_mode);
 				
-			set_color(disk_object, "cpucol", &cpu_col);
-			set_color(disk_object, "bgcol", &bg_col);
-			set_color(disk_object, "gmemcol", &gfx_col);
-			set_color(disk_object, "pmemcol", &pub_col);
-			set_color(disk_object, "vmemcol", &virt_col);
-			set_color(disk_object, "gridcol", &grid_col);
-			set_color(disk_object, "ulcol", &ul_col);
-			set_color(disk_object, "dlcol", &dl_col);
+			set_color(disk_object, "cpucol", &ctx->colors.cpu);
+			set_color(disk_object, "bgcol", &ctx->colors.background);
+			set_color(disk_object, "gmemcol", &ctx->colors.video_mem);
+			set_color(disk_object, "pmemcol", &ctx->colors.public_mem);
+			set_color(disk_object, "vmemcol", &ctx->colors.virtual_mem);
+			set_color(disk_object, "gridcol", &ctx->colors.grid);
+			set_color(disk_object, "ulcol", &ctx->colors.upload);
+			set_color(disk_object, "dlcol", &ctx->colors.download);
 
 			FreeDiskObject(disk_object);
 		}
@@ -691,102 +695,99 @@ clean:
 	return result;
 }
 
+static void handle_keyboard(Context *ctx, UWORD key)
+{
+	BOOL update = TRUE;
+
+	switch (key) {
+		case 'c':
+			ctx->show_bits ^= SHOW_CPU;
+			break;
+
+		case 'p':
+			ctx->show_bits ^= SHOW_PMEM;
+			break;
+
+		case 'v':
+			ctx->show_bits ^= SHOW_VMEM;
+			break;
+
+		case 'x':
+			ctx->show_bits ^= SHOW_GMEM;
+			break;
+
+		case 'g':
+			ctx->show_bits ^= SHOW_GRID;
+			break;
+
+		case 's':
+			ctx->show_bits ^= SOLID_DRAW;
+			break;
+
+		case 't':
+			ctx->show_bits ^= TRANSPARENT;
+			if (ctx->show_bits & TRANSPARENT) {
+				//TODO
+			}
+			break;
+
+		case 'm':
+			ctx->simple_mode ^= TRUE;
+			break;
+
+		case 'n':
+			ctx->show_bits ^= SHOW_NET;
+			SizeWindow(ctx->window, 0, (ctx->show_bits & SHOW_NET) ? YSIZE : -YSIZE);
+			break;
+
+		case 'd':
+			ctx->show_bits ^= DRAGBAR;
+
+			// Store old coordinates
+			const WORD x = ctx->window->LeftEdge;
+			const WORD y = ctx->window->TopEdge;
+
+			// Window is using WA_UserPort, so CloseWindow() will do CloseWindowSafely()
+			CloseWindow(ctx->window);
+
+			ctx->window = open_window(ctx, x, y);
+
+			if (ctx->window) {
+				ActivateWindow(ctx->window);
+			} else {
+				printf("Panic - can't reopen window!\n");
+				ctx->running = FALSE;
+			}
+			break;
+
+		case 'q':
+			ctx->running = FALSE;
+			break;
+
+		default:
+			update = FALSE;
+			break;
+	}
+
+	if (update) {
+		refresh_window(ctx);
+    }
+}
+
 static void handle_window_events(Context *ctx)
 {
 	struct IntuiMessage *msg;
 	while ((msg = (struct IntuiMessage *) GetMsg(ctx->window->UserPort)))
 	{
-		const ULONG Class = msg->Class;
-		const UWORD Code = msg->Code;
+		const ULONG event_class = msg->Class;
+		const UWORD event_code = msg->Code;
 
 		ReplyMsg((struct Message *) msg);
 
-		if (Class == IDCMP_CLOSEWINDOW) {
+		if (event_class == IDCMP_CLOSEWINDOW) {
 			ctx->running = FALSE;
-		} else if (Class == IDCMP_VANILLAKEY) {
-			BOOL update = FALSE;
-
-			switch (Code) {
-				case 'c':
-					ctx->show_bits ^= SHOW_CPU;
-					update = TRUE;
-					break;
-
-				case 'p':
-					ctx->show_bits ^= SHOW_PMEM;
-					update = TRUE;
-					break;
-
-				case 'v':
-					ctx->show_bits ^= SHOW_VMEM;
-					update = TRUE;
-					break;
-
-				case 'x':
-					ctx->show_bits ^= SHOW_GMEM;
-					update = TRUE;
-					break;
-
-				case 'g':
-					ctx->show_bits ^= SHOW_GRID;
-					update = TRUE;
-					break;
-
-				case 's':
-					ctx->show_bits ^= SOLID_DRAW;
-					update = TRUE;
-					break;
-
-				case 't':
-					ctx->show_bits ^= TRANSPARENT;
-					update = TRUE;
-					if (ctx->show_bits & TRANSPARENT) {
-						//TODO
-					}
-					break;
-
-				case 'm':
-					ctx->simple_mode ^= TRUE;
-					break;
-
-				case 'n':
-					ctx->show_bits ^= SHOW_NET;
-					SizeWindow(ctx->window, 0, (ctx->show_bits & SHOW_NET) ? YSIZE : -YSIZE);
-					update = TRUE;
-					break;
-
-				case 'd':
-					ctx->show_bits ^= DRAGBAR;
-
-					// Store old coordinates
-					const WORD x = ctx->window->LeftEdge;
-					const WORD y = ctx->window->TopEdge;
-
-					// Window is using WA_UserPort, so CloseWindow() will do CloseWindowSafely()
-					CloseWindow(ctx->window);
-
-					ctx->window = open_window(ctx, x, y);
-
-					if (ctx->window) {
-						ActivateWindow(ctx->window);
-						update = TRUE;
-					} else {
-						printf("Panic - can't reopen window!\n");
-						ctx->running = FALSE;
-					}
-					break;
-
-				case 'q':
-					ctx->running = FALSE;
-					break;
-
-				default:
-					break;
-			}
-
-			if (update) {
-				refresh_window(ctx);
-            }
+		} else if (event_class == IDCMP_VANILLAKEY) {
+			handle_keyboard(ctx, event_code);
 		}
 	}
 }
@@ -997,6 +998,15 @@ static void init_context(Context *ctx)
 	ctx->running = TRUE;
 	ctx->timer_device = -1;
 	ctx->show_bits = SHOW_CPU | SHOW_GRID | SHOW_PMEM | SHOW_VMEM | SHOW_GMEM | SOLID_DRAW | DRAGBAR;
+
+	ctx->colors.cpu = CPU_COL;
+	ctx->colors.public_mem = PUB_COL;
+	ctx->colors.virtual_mem = VIRT_COL;
+	ctx->colors.video_mem = VID_COL;
+	ctx->colors.grid = GRID_COL;
+	ctx->colors.background = BG_COL;
+	ctx->colors.upload = UL_COL;
+	ctx->colors.download = DL_COL;
 }
 
 static void main_loop(Context *ctx)
