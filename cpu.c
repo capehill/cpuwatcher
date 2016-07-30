@@ -60,6 +60,12 @@ Change log:
 
 static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.6 (28.7.2016)";
 
+#define WINDOW_TITLE_FORMAT "CPU: %3d%% V: %3d%% P: %3d%% G: %3d%%"
+#define SCREEN_TITLE_FORMAT "CPU: %3d%% Virtual: %3d%% Public: %3d%% Graphics: %3d%% Download: %4.1fKB/s Upload: %4.1fKB/s Mode: %c"
+
+#define WINDOW_TITLE_LEN 64
+#define SCREEN_TITLE_LEN 128
+
 #define MINUTES 5
 #define XSIZE (60 * MINUTES)
 
@@ -107,9 +113,13 @@ static UBYTE *gfx_mem;
 static UBYTE *upload;
 static UBYTE *download;
 
-static struct TimeVal idle_start;
-static struct TimeVal idle_finish;
-static volatile struct TimeVal idle_time;
+typedef struct {
+	struct TimeVal start;
+	struct TimeVal finish;
+	struct TimeVal total;
+} IdleTime;
+
+static IdleTime idle_time;
 
 typedef struct {
 	struct Window *window;
@@ -124,14 +134,14 @@ typedef struct {
 	BYTE main_sig;
 
 	struct TimeRequest *timer_req;
-	
+		
 	BYTE timer_device;
 	struct TimeVal tv;
-	
+		
 	APTR base_address;
 	uint32 bytes_per_row;
 	uint32 lpr;
-	
+		
 	// This set of flags controls which graphs are drawn
 	ULONG show_bits;
 
@@ -151,6 +161,9 @@ typedef struct {
     // How many times idle task was ran during 1 second. Run count 0 means 100% cpu usage, 100 means 0 % CPU usage
 	volatile ULONG run_count;
 
+	STRPTR window_title;
+	STRPTR screen_title;
+
 } Context;
 
 // network.c
@@ -160,18 +173,17 @@ BOOL update_netstats(UBYTE *, UBYTE *, float *, float *, float *, float *);
 // Idle task gives up CPU
 static void my_switch(void)
 {
-	GetSysTime(&idle_finish);
+	GetSysTime(&idle_time.finish);
 
-	SubTime(&idle_finish, &idle_start);
+	SubTime(&idle_time.finish, &idle_time.start);
 
-	idle_time.Seconds += idle_finish.Seconds;
-	idle_time.Microseconds += idle_finish.Microseconds;
+	AddTime(&idle_time.total, &idle_time.finish);
 }
 
 // Idle task gets CPU
 static void my_launch(void)
 {
-	GetSysTime(&idle_start);
+	GetSysTime(&idle_time.start);
 }
 
 static void idler(uint32 p1)
@@ -184,7 +196,7 @@ static void idler(uint32 p1)
 	idle_port = AllocSysObjectTags(ASOT_PORT,
 		ASOPORT_Name, "idler_port",
 		TAG_DONE);
-	
+		
 	if (!idle_port) {
 		ctx->idler_trouble = TRUE;
 		goto die;
@@ -214,19 +226,17 @@ static void idler(uint32 p1)
 	// Wait for main task
 	Wait(1L << ctx->idle_sig);
 
-	struct Task *me = FindTask(NULL); // ctx->idle_task also...
-
 	Forbid();
-	me->tc_Switch = my_switch;
-	me->tc_Launch = my_launch;
-	me->tc_Flags |= TF_SWITCH | TF_LAUNCH;
+	ctx->idle_task->tc_Switch = my_switch;
+	ctx->idle_task->tc_Launch = my_launch;
+	ctx->idle_task->tc_Flags |= TF_SWITCH | TF_LAUNCH;
 	Permit();
 
 	// Use minimum priority
-	SetTaskPri( me, -127 );
+	SetTaskPri(ctx->idle_task, -127);
 
-	while ( ctx->running ) {
-		if ( ctx->simple_mode ) {
+	while (ctx->running) {
+		if (ctx->simple_mode) {
  			// When in "Simple" mode, pause for 1/100th of second
 
 			struct TimeVal dest, source;
@@ -244,19 +254,19 @@ static void idler(uint32 p1)
 			pause_req->Time.Seconds = dest.Seconds;
 			pause_req->Time.Microseconds = dest.Microseconds;
 
-			DoIO( (struct IORequest *) pause_req );
+			DoIO((struct IORequest *) pause_req);
 		}
 	}
 
 	Forbid();
-	me->tc_Switch = NULL;
-	me->tc_Launch = NULL;
-	me->tc_Flags ^= TF_SWITCH | TF_LAUNCH;
+	ctx->idle_task->tc_Switch = NULL;
+	ctx->idle_task->tc_Launch = NULL;
+	ctx->idle_task->tc_Flags ^= TF_SWITCH | TF_LAUNCH;
 	Permit();
 
 die:
 
-	if (ctx->idle_sig != -1 ) {
+	if (ctx->idle_sig != -1) {
 		FreeSignal( ctx->idle_sig );
 		ctx->idle_sig = -1;
 	}
@@ -273,7 +283,7 @@ die:
 	Signal(ctx->main_task, 1L << ctx->main_sig);
 
 	// Waiting for termination
-	Wait( 0L );
+	Wait(0L);
 }
 
 static void plot(Context *ctx, const UBYTE* const array, const ULONG color)
@@ -426,7 +436,7 @@ static ULONG parse_hex(STRPTR str)
 static void set_bit(struct DiskObject *disk_object, STRPTR name, Context *ctx, int bit)
 {
 	STRPTR tool_type = FindToolType(disk_object->do_ToolTypes, name);
-	
+		
 	if (tool_type) {
 		//if (MatchToolValue(cpu, "True"))
 		{
@@ -438,10 +448,10 @@ static void set_bit(struct DiskObject *disk_object, STRPTR name, Context *ctx, i
 static void set_int(struct DiskObject *disk_object, STRPTR name, int *value)
 {
 	STRPTR tool_type = FindToolType(disk_object->do_ToolTypes, name);
-	
+		
 	if (tool_type) {
 		const int temp = atoi(tool_type);
-		
+			
 		if (temp >= 0) {
 			*value = temp;
 		}
@@ -451,7 +461,7 @@ static void set_int(struct DiskObject *disk_object, STRPTR name, int *value)
 static void set_bool(struct DiskObject *disk_object, STRPTR name, BOOL *value)
 {
 	STRPTR tool_type = FindToolType(disk_object->do_ToolTypes, name);
-	
+		
 	if (tool_type) {
 		*value = TRUE;
 	}
@@ -460,7 +470,7 @@ static void set_bool(struct DiskObject *disk_object, STRPTR name, BOOL *value)
 static void set_color(struct DiskObject *disk_object, STRPTR name, ULONG *value)
 {
 	STRPTR tool_type = FindToolType(disk_object->do_ToolTypes, name);
-	
+		
 	if (tool_type) {
 		*value = parse_hex(tool_type);
 	}
@@ -471,7 +481,7 @@ static void read_config(Context *ctx, STRPTR file_name)
 	if (file_name) {
 
 		struct DiskObject *disk_object = (struct DiskObject *)GetDiskObject(file_name);
-		
+			
 		if (disk_object) {
 
 			ctx->show_bits = 0;
@@ -488,9 +498,9 @@ static void read_config(Context *ctx, STRPTR file_name)
 
 			set_int(disk_object, "xpos", &ctx->x_pos);
 			set_int(disk_object, "ypos", &ctx->y_pos);
-			
+				
 			set_bool(disk_object, "simple", (BOOL *)&ctx->simple_mode);
-			
+				
 			set_color(disk_object, "cpucol", &cpu_col);
 			set_color(disk_object, "bgcol", &bg_col);
 			set_color(disk_object, "gmemcol", &gfx_col);
@@ -555,9 +565,9 @@ static BOOL allocate_resources(Context *ctx)
 {
 	BOOL result = FALSE;
 
-	ctx->main_sig = AllocSignal( -1 );
+	ctx->main_sig = AllocSignal(-1);
 
-	if ( ctx->main_sig == -1 ) {
+	if (ctx->main_sig == -1) {
 		printf("Couldn't allocate signal\n");
 		goto clean;
 	}
@@ -569,9 +579,9 @@ static BOOL allocate_resources(Context *ctx)
 	gfx_mem = my_alloc( XSIZE );
 
 	upload = my_alloc( XSIZE );
-	download = my_alloc( XSIZE );
+	download = my_alloc(XSIZE );
 
-	if ( ! ( cpu && pub_mem && virt_mem && gfx_mem && upload && download ) ) {
+	if (!(cpu && pub_mem && virt_mem && gfx_mem && upload && download)) {
 		printf("Out of memory\n");
 		goto clean;
 	}
@@ -581,8 +591,8 @@ static BOOL allocate_resources(Context *ctx)
 		BMATags_Clear, TRUE,
 		BMATags_UserPrivate, TRUE,
 		TAG_DONE );
-	
-	if ( ! ctx->bm ) {
+		
+	if (!ctx->bm) {
 		printf("Couln't allocate bitmap\n");
 		goto clean;
 	}
@@ -592,7 +602,7 @@ static BOOL allocate_resources(Context *ctx)
 		LBM_BytesPerRow, &ctx->bytes_per_row,
 		TAG_DONE );
 
-	if ( lock ) {
+	if (lock) {
 		ctx->lpr = ctx->bytes_per_row / 4;
 		UnlockBitMap(lock);
 	} else {
@@ -604,7 +614,7 @@ static BOOL allocate_resources(Context *ctx)
 		ASOPORT_Name, "user_port",
 		TAG_DONE);
 
-	if ( ! ctx->user_port ) {
+	if (!ctx->user_port) {
 		printf("Couldn't create user port\n");
 		goto clean;
 	}
@@ -613,7 +623,7 @@ static BOOL allocate_resources(Context *ctx)
 		ASOPORT_Name, "timer_port",
 		TAG_DONE);
 
-	if ( !ctx->timer_port ) {
+	if (!ctx->timer_port) {
 		printf("Couldn't create timer port\n");
 		goto clean;
 	}
@@ -623,36 +633,54 @@ static BOOL allocate_resources(Context *ctx)
 		ASOIOR_ReplyPort, ctx->timer_port,
 		TAG_DONE);
 
-	if ( !ctx->timer_req ) {
+	if (!ctx->timer_req) {
 		printf("Couldn't create IO request\n");
 		goto clean;
 	}
 
-	if ( ( ctx->timer_device = OpenDevice( TIMERNAME, UNIT_WAITUNTIL, (struct IORequest *) ctx->timer_req, 0 ) ) ) {
-    	printf("Couldn't open timer.device\n");
+	ctx->timer_device = OpenDevice(TIMERNAME, UNIT_WAITUNTIL,
+		(struct IORequest *) ctx->timer_req, 0);
+		
+	if (ctx->timer_device) {		
+		printf("Couldn't open timer.device\n");
 		goto clean;
 	}
 
-	ITimer = (struct TimerIFace *) GetInterface( (struct Library *) ctx->timer_req->Request.io_Device, "main", 1, NULL );
-	
-	if ( !ITimer ) {
+	ITimer = (struct TimerIFace *) GetInterface(
+	    (struct Library *) ctx->timer_req->Request.io_Device, "main", 1, NULL);
+		
+	if (!ITimer) {
 		printf("Couldn't get Timer interface\n");
 		goto clean;
 	}
 
 	ctx->window = open_window(ctx, ctx->x_pos, ctx->y_pos);
 
-	if ( ! ctx->window ) {
+	if (!ctx->window) {
 		printf("Couldn't open window\n");
 		goto clean;
 	}
-	
+		
 	ctx->idle_task = CreateTaskTags("Uuno", 0, idler, 4096,
 		AT_Param1, ctx,
 		TAG_DONE);
 
-	if ( !ctx->idle_task ) {
+	if (!ctx->idle_task) {
 		printf("Couldn't create idler task\n");
+		goto clean;
+	}
+
+	ctx->window_title = my_alloc(WINDOW_TITLE_LEN);
+
+	if (!ctx->window_title) {
+		printf("Couldn't allocate window title\n");
+		goto clean;
+	}
+
+	ctx->screen_title = my_alloc(SCREEN_TITLE_LEN);
+
+	if (!ctx->screen_title) {
+		printf("Couldn't allocate screen title\n");
 		goto clean;
 	}
 
@@ -666,19 +694,19 @@ clean:
 static void handle_window_events(Context *ctx)
 {
 	struct IntuiMessage *msg;
-	while ( (msg = (struct IntuiMessage *) GetMsg( ctx->window->UserPort ) ) )
+	while ((msg = (struct IntuiMessage *) GetMsg(ctx->window->UserPort)))
 	{
 		const ULONG Class = msg->Class;
 		const UWORD Code = msg->Code;
 
-		ReplyMsg( (struct Message *) msg );
+		ReplyMsg((struct Message *) msg);
 
-		if ( Class == IDCMP_CLOSEWINDOW ) {
+		if (Class == IDCMP_CLOSEWINDOW) {
 			ctx->running = FALSE;
-		} else if ( Class == IDCMP_VANILLAKEY ) {
+		} else if (Class == IDCMP_VANILLAKEY) {
 			BOOL update = FALSE;
 
-			switch ( Code ) {
+			switch (Code) {
 				case 'c':
 					ctx->show_bits ^= SHOW_CPU;
 					update = TRUE;
@@ -712,7 +740,7 @@ static void handle_window_events(Context *ctx)
 				case 't':
 					ctx->show_bits ^= TRANSPARENT;
 					update = TRUE;
-					if ( ctx->show_bits & TRANSPARENT) {
+					if (ctx->show_bits & TRANSPARENT) {
 						//TODO
 					}
 					break;
@@ -740,7 +768,7 @@ static void handle_window_events(Context *ctx)
 					ctx->window = open_window(ctx, x, y);
 
 					if (ctx->window) {
-						ActivateWindow( ctx->window );
+						ActivateWindow(ctx->window);
 						update = TRUE;
 					} else {
 						printf("Panic - can't reopen window!\n");
@@ -779,25 +807,24 @@ static void measure_cpu(Context *ctx)
 
 	if (ctx->simple_mode) {
 		value -= ctx->run_count;
-
-		ctx->run_count = 0;
 	} else {
-		value -= 100 * (idle_time.Seconds * 1000000 + idle_time.Microseconds) / 1000000.0f;
-
-		idle_time.Seconds = 0;
-	    idle_time.Microseconds = 0;
+		value -= 100 * (idle_time.total.Seconds * 1000000 + idle_time.total.Microseconds) / 1000000.0f;
 	}
 
-	cpu[ ctx->iter ] = clamp100(value);
+	ctx->run_count = 0;
+	idle_time.total.Seconds = 0;
+	idle_time.total.Microseconds = 0;
+
+	cpu[ctx->iter] = clamp100(value);
 }
 
 static void measure_memory(Context *ctx)
 {
-	UBYTE value = 100 * (float) AvailMem( MEMF_PUBLIC ) / AvailMem(MEMF_PUBLIC|MEMF_TOTAL);
+	UBYTE value = 100 * (float) AvailMem(MEMF_PUBLIC) / AvailMem(MEMF_PUBLIC|MEMF_TOTAL);
 
 	pub_mem[ctx->iter] = clamp100(value);
 
-	value = 100 * (float) AvailMem( MEMF_VIRTUAL ) / AvailMem(MEMF_VIRTUAL|MEMF_TOTAL);
+	value = 100 * (float) AvailMem(MEMF_VIRTUAL) / AvailMem(MEMF_VIRTUAL|MEMF_TOTAL);
 
 	virt_mem[ctx->iter] = clamp100(value);
 
@@ -807,7 +834,7 @@ static void measure_memory(Context *ctx)
 		GBD_TotalMemory, &total_vid,
 		GBD_FreeMemory, &free_vid,
 		TAG_DONE) == 2) {
-		
+			
 		value = 100.0 * free_vid / total_vid;
 
 		gfx_mem[ctx->iter] = clamp100(value);
@@ -821,10 +848,10 @@ static void measure_network(Context *ctx, float *dl_speed, float *ul_speed)
 	float dl_mult = 1.0f, ul_mult = 1.0f;
 	UBYTE dl_p, ul_p;
 
-	if ( update_netstats( &dl_p, &ul_p, &dl_mult, &ul_mult, dl_speed, ul_speed ) ) {
-		
+	if (update_netstats(&dl_p, &ul_p, &dl_mult, &ul_mult, dl_speed, ul_speed)) {
+			
 		UWORD i;
-		for ( i = 0; i < XSIZE; i++ ) {
+		for (i = 0; i < XSIZE; i++) {
 			download[i] *= dl_mult;
 			upload[i] *= ul_mult;
 		}
@@ -834,26 +861,29 @@ static void measure_network(Context *ctx, float *dl_speed, float *ul_speed)
 	upload[ctx->iter] = ul_p;
 }
 
-static void handle_timer_events(Context *ctx)
+static void start_timer(Context *ctx)
 {
-	// Window string is a bit shorter, window is currently only about 300 pixels wide anyway
-	//char buffer[256];
-	//char
-	/*static*/ char *w_format 		= "CPU: %3d%% V: %3d%% P: %3d%% G: %3d%%";
-	/*static*/ char *s_format 		= "CPU: %3d%% Virtual: %3d%% Public: %3d%% Graphics: %3d%% Download: %4.1fKB/s Upload: %4.1fKB/s Mode: %c";
-	/*static*/ char w_title_string[] = "CPU: 100%% V: 100%% P: 100%% G: 100%%";
-	/*static*/ char s_title_string[] = "CPU: 100%% Virtual: 100%% Public: 100%% Graphics: 100%% Download: 9999.9KB/s Upload: 9999.9KB/s Mode: S";
+	struct TimeVal increment;
 
-	GetMsg( ctx->timer_port );
+	GetSysTime(&ctx->tv);
 
-	//tv.tv_micro += 1000000/FREQ;
-	ctx->tv.Seconds += 1;
+	increment.Seconds = 1;
+	increment.Microseconds = 0;
+
+	AddTime(&ctx->tv, &increment);
 
 	ctx->timer_req->Request.io_Command = TR_ADDREQUEST;
 	ctx->timer_req->Time.Seconds = ctx->tv.Seconds;
 	ctx->timer_req->Time.Microseconds = ctx->tv.Microseconds;
 
-	SendIO( (struct IORequest*) ctx->timer_req );
+	SendIO((struct IORequest *) ctx->timer_req);
+}
+
+static void handle_timer_events(Context *ctx)
+{
+	GetMsg(ctx->timer_port);
+
+	start_timer(ctx);
 
 	// Timer signal, update visuals once per second
 	//if ( (++count % FREQ) == 0)
@@ -868,35 +898,25 @@ static void handle_timer_events(Context *ctx)
 		measure_memory(ctx);
 		measure_network(ctx, &dl_speed, &ul_speed);
 
-  		// Update window (if dragbar) & screen titles too
-		sprintf( w_title_string, w_format, cpu[ctx->iter], virt_mem[ctx->iter], pub_mem[ctx->iter], gfx_mem[ctx->iter] );
-		sprintf( s_title_string, s_format, cpu[ctx->iter], virt_mem[ctx->iter], pub_mem[ctx->iter], gfx_mem[ctx->iter],
-			dl_speed, ul_speed, ctx->simple_mode ? 'S' : 'B' );
+		snprintf(ctx->window_title, WINDOW_TITLE_LEN, WINDOW_TITLE_FORMAT,
+		    cpu[ctx->iter], virt_mem[ctx->iter], pub_mem[ctx->iter], gfx_mem[ctx->iter]);
+		
+		snprintf(ctx->screen_title, SCREEN_TITLE_LEN, SCREEN_TITLE_FORMAT,
+		    cpu[ctx->iter], virt_mem[ctx->iter], pub_mem[ctx->iter], gfx_mem[ctx->iter],
+			dl_speed, ul_speed, ctx->simple_mode ? 'S' : 'B');
 
-		SetWindowTitles( ctx->window, (ctx->show_bits & DRAGBAR) ? w_title_string : NULL, s_title_string );
+		SetWindowTitles(ctx->window,
+		    (ctx->show_bits & DRAGBAR) ? ctx->window_title : NULL, ctx->screen_title);
 
 		refresh_window(ctx);
    	}
 }
 
-static void start_timer(Context *ctx)
-{
-	GetSysTime( &ctx->tv );
-
-	ctx->tv.Seconds += 1;
-
-	ctx->timer_req->Request.io_Command = TR_ADDREQUEST;
-	ctx->timer_req->Time.Seconds = ctx->tv.Seconds;
-	ctx->timer_req->Time.Microseconds = ctx->tv.Microseconds;
-
-	SendIO( (struct IORequest*) ctx->timer_req );
-}
-
 static void stop_timer(Context *ctx)
 {
-	if ( ! CheckIO( (struct IORequest*) ctx->timer_req ) ) {
-		AbortIO( (struct IORequest*) ctx->timer_req );
-		WaitIO( (struct IORequest*) ctx->timer_req );
+	if (!CheckIO((struct IORequest *) ctx->timer_req)) {
+		AbortIO((struct IORequest *) ctx->timer_req);
+		WaitIO((struct IORequest *) ctx->timer_req);
 	}
 }
 
@@ -960,6 +980,9 @@ static void free_resources(Context *ctx)
 
 	if (upload) my_free( upload );
 	if (download) my_free( download );
+
+	if (ctx->window_title) my_free(ctx->window_title);
+	if (ctx->screen_title) my_free(ctx->screen_title);
 }
 
 static void init_context(Context *ctx)
@@ -1046,3 +1069,4 @@ int main(int argc, char ** argv)
 
 	return 0;
 }
+
