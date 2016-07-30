@@ -92,6 +92,10 @@ static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.6 (30.7
 #define TRANSPARENT (1L << 7) // Pseudo tranparency
 #define DRAGBAR     (1L << 8) // Dragbar
 
+//extern struct Library *SysBase;
+extern struct Library *GfxBase;
+struct TimerIFace *ITimer = NULL;
+
 typedef struct {
 	ULONG cpu;
 	ULONG public_mem;
@@ -103,17 +107,14 @@ typedef struct {
 	ULONG download;
 } Colors;
 
-//extern struct Library *SysBase;
-extern struct Library *GfxBase;
-struct TimerIFace *ITimer = NULL;
-
-// Graph data
-static UBYTE *cpu;
-static UBYTE *virt_mem;
-static UBYTE *pub_mem;
-static UBYTE *gfx_mem;
-static UBYTE *upload;
-static UBYTE *download;
+typedef struct {
+	UBYTE cpu;
+	UBYTE virtual_mem;
+	UBYTE public_mem;
+	UBYTE video_mem;
+	UBYTE upload;
+	UBYTE download;
+} Sample;
 
 typedef struct {
 	struct TimeVal start;
@@ -168,11 +169,66 @@ typedef struct {
 
 	Colors colors;
 
+	Sample *samples;
+
+	float dl_speed;
+	float ul_speed;
+
 } Context;
 
 // network.c
 void init_netstats(void);
 BOOL update_netstats(UBYTE *, UBYTE *, float *, float *, float *, float *);
+
+static UBYTE *get_cpu_ptr(Context *ctx)
+{
+	return &ctx->samples[0].cpu;
+}
+
+static UBYTE *get_public_mem_ptr(Context *ctx)
+{
+	return &ctx->samples[0].public_mem;
+}
+
+static UBYTE *get_virtual_mem_ptr(Context *ctx)
+{
+	return &ctx->samples[0].virtual_mem;
+}
+
+static UBYTE *get_video_mem_ptr(Context *ctx)
+{
+	return &ctx->samples[0].video_mem;
+}
+
+static UBYTE *get_upload_ptr(Context *ctx)
+{
+	return &ctx->samples[0].upload;
+}
+
+static UBYTE *get_download_ptr(Context *ctx)
+{
+	return &ctx->samples[0].download;
+}
+
+static UBYTE cur_cpu(Context *ctx)
+{
+	return ctx->samples[ctx->iter].cpu;
+}
+
+static UBYTE cur_public_mem(Context *ctx)
+{
+	return ctx->samples[ctx->iter].public_mem;
+}
+
+static UBYTE cur_virtual_mem(Context *ctx)
+{
+	return ctx->samples[ctx->iter].virtual_mem;
+}
+
+static UBYTE cur_video_mem(Context *ctx)
+{
+	return ctx->samples[ctx->iter].video_mem;
+}
 
 // Idle task gives up CPU
 static void my_switch(void)
@@ -290,35 +346,43 @@ die:
 	Wait(0L);
 }
 
+static void plot_vertical(Context *ctx, int x, int start, int end, ULONG color)
+{
+	int y;
+	ULONG *ptr = (ULONG *)ctx->base_address + x + (YSIZE - 1 - end) * ctx->lpr;
+
+	for (y = start; y <= end; y++) {
+		*ptr = color;
+		ptr += ctx->lpr;
+	}
+}
+
+
 static void plot(Context *ctx, const UBYTE* const array, const ULONG color)
 {
+	int x;
 	ULONG *ptr = ctx->base_address;
 
-	WORD x, y;
-	for ( x=0; x < XSIZE; x++ ) {
-		UBYTE cur_y = array[ (ctx->iter+1 + x) % XSIZE ];
+	for (x = 0; x < XSIZE; x++) {
+		int iter = (ctx->iter + 1 + x) % XSIZE;
+		
+		UBYTE cur_y = *(array + iter * sizeof(Sample));
 
-		// Plot the current dot
-		*(ptr + x + (YSIZE - 1 - cur_y) * ctx->lpr ) = color;
+		// Plot the current level
+		*(ptr + x + (YSIZE - 1 - cur_y) * ctx->lpr) = color;
 
-		// Make the plotted line solid
-		if ( ctx->show_bits & SOLID_DRAW ) {
-			UBYTE prev_y = array[ (ctx->iter + x) % XSIZE ];
-			WORD diff = cur_y - prev_y;
+		if (x > 0 && ctx->show_bits & SOLID_DRAW) {
 
-			if ( x > 0 && diff != 0 ) {
-				if ( diff < 0 ) {
-					UBYTE temp = cur_y;
-					cur_y = prev_y;
-					prev_y = temp;
-				}
+			int prev = (ctx->iter + x) % XSIZE;
 
-				ULONG *_ptr = ptr + x + (YSIZE - 1 - prev_y) * ctx->lpr;
+			UBYTE prev_y = *(array + prev * sizeof(Sample));
+			
+			int diff = cur_y - prev_y;
 
-				for ( y = prev_y; y <= cur_y; y++ ) {
-					*_ptr = color;
-					_ptr -= ctx->lpr;
-				}
+			if (diff < 0) {
+				plot_vertical(ctx, x, cur_y, prev_y, color);
+			} else if (diff > 0) {
+				plot_vertical(ctx, x, prev_y, cur_y, color);
 			}
 		}
 	}
@@ -327,24 +391,29 @@ static void plot(Context *ctx, const UBYTE* const array, const ULONG color)
 /* Special function to plot 2-sided network graph */
 static void plot_net(Context *ctx)
 {
+	int x, y;
 	ULONG *ptr = (ULONG *)ctx->base_address + ctx->lpr * YSIZE;
-	WORD x, y;
 
-	for ( x = 0; x < XSIZE; x++ ) {
+	UBYTE *ul = get_upload_ptr(ctx);
+	UBYTE *dl = get_download_ptr(ctx);
+
+	for (x = 0; x < XSIZE; x++) {
+		int iter = (ctx->iter + 1 + x) % XSIZE;
+
 		// Upload, above the center line
-		WORD start_y = - upload[ (ctx->iter + 1 + x) % XSIZE ] / 2;
-		ULONG *_ptr = ptr + x + ( YSIZE / 2 + start_y) * ctx->lpr;
+		int start_y = - *(ul + iter * sizeof(Sample)) / 2;
+		ULONG *_ptr = ptr + x + (YSIZE / 2 + start_y) * ctx->lpr;
 
-		for ( y = start_y; y < 0; y++ ) {
+		for (y = start_y; y < 0; y++) {
 			*_ptr = ctx->colors.upload;
 			_ptr += ctx->lpr;
 		}
 
 		// Download, below the center line
-		WORD end_y = download[ (ctx->iter + 1 + x) % XSIZE] / 2;
+		int end_y = *(dl + iter * sizeof(Sample)) / 2;
 		_ptr = ptr + x + (YSIZE / 2 + 1) * ctx->lpr;
 
-		for ( y = 1 ; y <= end_y; y++ ) {
+		for (y = 1 ; y <= end_y; y++) {
 			*_ptr = ctx->colors.download;
 			_ptr += ctx->lpr;
 		}
@@ -353,10 +422,10 @@ static void plot_net(Context *ctx)
 
 static void clear(Context *ctx)
 {
+	int x, y;
 	ULONG *ptr = ctx->base_address;
 
 	WORD height = ctx->window->Height - (ctx->window->BorderBottom + ctx->window->BorderTop);
-	WORD x, y;
 
 	for (y = 0; y < height; y++) {
 		for (x = 0; x < XSIZE; x++) {
@@ -369,28 +438,26 @@ static void clear(Context *ctx)
 
 static void draw_grid(Context *ctx)
 {
+	int x, y;
     ULONG *ptr = ctx->base_address;
-	WORD x, y;
 
 	int total_height = (ctx->show_bits & SHOW_NET) ? 2 * YSIZE : YSIZE;
 
 	// Horizontal lines
-	for ( y = 0; y < total_height; y += 10 ) {
-		for ( x = 0; x < XSIZE; x++ ) {
+	for (y = 0; y < total_height; y += 10) {
+		for (x = 0; x < XSIZE; x++) {
 			ptr[x] = ctx->colors.grid;
 		}
 		ptr += 10 * ctx->lpr;
 	}
 
-	ptr = ctx->base_address;
-
 	// Vertical lines
-	for ( x = 0; x < XSIZE; x += 60 ) {
-		ULONG* _ptr = ptr + x;
+	for (x = 0; x < XSIZE; x += 60) {
+		ptr = (ULONG *)ctx->base_address + x;
 
-		for ( y = 0; y < total_height; y++ ) {
-			*_ptr = ctx->colors.grid;
-			_ptr += ctx->lpr;
+		for (y = 0; y < total_height; y++) {
+			*ptr = ctx->colors.grid;
+			ptr += ctx->lpr;
 		}
 	}
 }
@@ -399,27 +466,27 @@ static void refresh_window(Context *ctx)
 {
 	clear(ctx);
 
-	if ( ctx->show_bits & SHOW_GRID ) {
+	if (ctx->show_bits & SHOW_GRID) {
 		draw_grid(ctx);
 	}
 
-	if ( ctx->show_bits & SHOW_PMEM ) {
-		plot(ctx, pub_mem, ctx->colors.public_mem );
+	if (ctx->show_bits & SHOW_PMEM) {
+		plot(ctx, get_public_mem_ptr(ctx), ctx->colors.public_mem );
 	}
 
-	if ( ctx->show_bits & SHOW_VMEM ) {
-		plot(ctx, virt_mem, ctx->colors.virtual_mem );
+	if (ctx->show_bits & SHOW_VMEM) {
+		plot(ctx, get_virtual_mem_ptr(ctx), ctx->colors.virtual_mem );
 	}
 
-	if ( ctx->show_bits & SHOW_GMEM ) {
-		plot(ctx, gfx_mem, ctx->colors.video_mem );
+	if (ctx->show_bits & SHOW_GMEM) {
+		plot(ctx, get_video_mem_ptr(ctx), ctx->colors.video_mem );
 	}
 
-	if ( ctx->show_bits & SHOW_CPU ) {
-		plot(ctx, cpu, ctx->colors.cpu );
+	if (ctx->show_bits & SHOW_CPU) {
+		plot(ctx, get_cpu_ptr(ctx), ctx->colors.cpu );
 	}
 
-	if ( ctx->show_bits & SHOW_NET ) {
+	if (ctx->show_bits & SHOW_NET) {
 		plot_net(ctx);
 	}
 
@@ -430,6 +497,16 @@ static void refresh_window(Context *ctx)
 		ctx->window->Width - (ctx->window->BorderRight + ctx->window->BorderLeft),
 		ctx->window->Height - (ctx->window->BorderBottom + ctx->window->BorderTop),
 		0xC0);
+
+	snprintf(ctx->window_title, WINDOW_TITLE_LEN, WINDOW_TITLE_FORMAT,
+		cur_cpu(ctx), cur_virtual_mem(ctx), cur_public_mem(ctx), cur_video_mem(ctx));
+
+	snprintf(ctx->screen_title, SCREEN_TITLE_LEN, SCREEN_TITLE_FORMAT,
+		cur_cpu(ctx), cur_virtual_mem(ctx), cur_public_mem(ctx), cur_video_mem(ctx),
+		ctx->dl_speed, ctx->ul_speed, ctx->simple_mode ? 'S' : 'B');
+
+	SetWindowTitles(ctx->window,
+	    (ctx->show_bits & DRAGBAR) ? ctx->window_title : NULL, ctx->screen_title);
 }
 
 static ULONG parse_hex(STRPTR str)
@@ -522,8 +599,8 @@ static void read_config(Context *ctx, STRPTR file_name)
 static void handle_args(Context *ctx, int argc, char ** argv)
 {
 	if (! argc) {
-		struct WBStartup * wb_startup = (struct WBStartup *) argv;
-		struct WBArg * wb_arg = wb_startup->sm_ArgList;
+		struct WBStartup *wb_startup = (struct WBStartup *) argv;
+		struct WBArg *wb_arg = wb_startup->sm_ArgList;
 
 		if (wb_arg /*&& wb_arg->wa_Lock*/) {
 			//BPTR old_dir = GetCurrentDir(/*wb_arg->wa_Lock*/);
@@ -576,17 +653,10 @@ static BOOL allocate_resources(Context *ctx)
 		goto clean;
 	}
 
-	cpu = my_alloc( XSIZE );
+	ctx->samples = my_alloc(XSIZE * sizeof(Sample));
 
-	pub_mem = my_alloc( XSIZE );
-	virt_mem = my_alloc( XSIZE );
-	gfx_mem = my_alloc( XSIZE );
-
-	upload = my_alloc( XSIZE );
-	download = my_alloc(XSIZE );
-
-	if (!(cpu && pub_mem && virt_mem && gfx_mem && upload && download)) {
-		printf("Out of memory\n");
+	if (!ctx->samples) {
+		printf("Couldn't allocate sample data\n");
 		goto clean;
 	}
 
@@ -816,18 +886,18 @@ static void measure_cpu(Context *ctx)
 	idle_time.total.Seconds = 0;
 	idle_time.total.Microseconds = 0;
 
-	cpu[ctx->iter] = clamp100(value);
+	ctx->samples[ctx->iter].cpu = clamp100(value);
 }
 
 static void measure_memory(Context *ctx)
 {
 	UBYTE value = 100 * (float) AvailMem(MEMF_PUBLIC) / AvailMem(MEMF_PUBLIC|MEMF_TOTAL);
 
-	pub_mem[ctx->iter] = clamp100(value);
+	ctx->samples[ctx->iter].public_mem = clamp100(value);
 
 	value = 100 * (float) AvailMem(MEMF_VIRTUAL) / AvailMem(MEMF_VIRTUAL|MEMF_TOTAL);
 
-	virt_mem[ctx->iter] = clamp100(value);
+	ctx->samples[ctx->iter].virtual_mem = clamp100(value);
 
 	uint64 total_vid, free_vid;
 
@@ -838,9 +908,7 @@ static void measure_memory(Context *ctx)
 			
 		value = 100.0 * free_vid / total_vid;
 
-		gfx_mem[ctx->iter] = clamp100(value);
-	} else {
-		gfx_mem[ctx->iter] = 0;
+		ctx->samples[ctx->iter].video_mem = clamp100(value);
 	}
 }
 
@@ -851,15 +919,15 @@ static void measure_network(Context *ctx, float *dl_speed, float *ul_speed)
 
 	if (update_netstats(&dl_p, &ul_p, &dl_mult, &ul_mult, dl_speed, ul_speed)) {
 			
-		UWORD i;
+		int i;
 		for (i = 0; i < XSIZE; i++) {
-			download[i] *= dl_mult;
-			upload[i] *= ul_mult;
+			ctx->samples[i].download *= dl_mult;
+			ctx->samples[i].upload *= ul_mult;
 		}
 	}
 
-	download[ctx->iter] = dl_p;
-	upload[ctx->iter] = ul_p;
+	ctx->samples[ctx->iter].download = dl_p;
+	ctx->samples[ctx->iter].upload = ul_p;
 }
 
 static void start_timer(Context *ctx)
@@ -889,25 +957,12 @@ static void handle_timer_events(Context *ctx)
 	// Timer signal, update visuals once per second
 	//if ( (++count % FREQ) == 0)
 	{
-    	// Down/Up load speed in Kilobytes
-	    float dl_speed = 0, ul_speed = 0;
-
 		++ctx->iter;
 		ctx->iter %= XSIZE;
 
 		measure_cpu(ctx);
 		measure_memory(ctx);
-		measure_network(ctx, &dl_speed, &ul_speed);
-
-		snprintf(ctx->window_title, WINDOW_TITLE_LEN, WINDOW_TITLE_FORMAT,
-		    cpu[ctx->iter], virt_mem[ctx->iter], pub_mem[ctx->iter], gfx_mem[ctx->iter]);
-		
-		snprintf(ctx->screen_title, SCREEN_TITLE_LEN, SCREEN_TITLE_FORMAT,
-		    cpu[ctx->iter], virt_mem[ctx->iter], pub_mem[ctx->iter], gfx_mem[ctx->iter],
-			dl_speed, ul_speed, ctx->simple_mode ? 'S' : 'B');
-
-		SetWindowTitles(ctx->window,
-		    (ctx->show_bits & DRAGBAR) ? ctx->window_title : NULL, ctx->screen_title);
+		measure_network(ctx, &ctx->dl_speed, &ctx->ul_speed);
 
 		refresh_window(ctx);
    	}
@@ -973,17 +1028,10 @@ static void free_resources(Context *ctx)
 		FreeBitMap( ctx->bm );
 	}
 
-	if (cpu) my_free( cpu );
-
-	if (gfx_mem) my_free( gfx_mem );
-	if (pub_mem) my_free( pub_mem );
-	if (virt_mem) my_free( virt_mem );
-
-	if (upload) my_free( upload );
-	if (download) my_free( download );
-
 	if (ctx->window_title) my_free(ctx->window_title);
 	if (ctx->screen_title) my_free(ctx->screen_title);
+
+	if (ctx->samples) my_free(ctx->samples);
 }
 
 static void init_context(Context *ctx)
