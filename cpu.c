@@ -16,7 +16,8 @@ Change log:
 - requires graphics.library V54
 - replaced deprecated system calls
 - fixed some task sync issues
-- replaced pseudo transparency with opaqueness parameter added (requires compositing)
+- replaced pseudo transparency with opaqueness parameter (requires compositing)
+- dowload graph position changed
 - code cleanup and refactoring
 - started a GitHub project
 
@@ -181,6 +182,8 @@ typedef struct {
 #define get_ptr(name) &ctx->samples[0].name
 #define get_cur(name) ctx->samples[ctx->iter].name
 
+#define MAX(a,b) ((a) > (b) ? (a) : (b))
+
 // network.c
 void init_netstats(void);
 BOOL update_netstats(UBYTE *, UBYTE *, float *, float *, float *, float *);
@@ -306,7 +309,7 @@ die:
 static void plot_vertical(Context *ctx, int x, int start, int end, ULONG color)
 {
 	int y;
-	ULONG *ptr = (ULONG *)ctx->base_address + x + (YSIZE - 1 - end) * ctx->lpr;
+	ULONG *ptr = (ULONG *)ctx->base_address + x + start * ctx->lpr;
 
 	for (y = start; y <= end; y++) {
 		*ptr = color;
@@ -314,6 +317,15 @@ static void plot_vertical(Context *ctx, int x, int start, int end, ULONG color)
 	}
 }
 
+static void plot_horizontal(Context *ctx, int y, int start, int end, ULONG color)
+{
+	int x;
+	ULONG *ptr = (ULONG *)ctx->base_address + y * ctx->lpr;
+
+	for (x = start; x <= end; x++) {
+		ptr[x] = color;
+	}
+}
 
 static void plot(Context *ctx, const UBYTE* const array, const ULONG color)
 {
@@ -321,25 +333,25 @@ static void plot(Context *ctx, const UBYTE* const array, const ULONG color)
 	ULONG *ptr = ctx->base_address;
 
 	for (x = 0; x < XSIZE; x++) {
-		int iter = (ctx->iter + 1 + x) % XSIZE;
-		
-		UBYTE cur_y = *(array + iter * sizeof(Sample));
+		int iter = (ctx->iter + 1 + x) % XSIZE;		   
+		int cur_y = *(array + iter * sizeof(Sample));
 
 		// Plot the current level
 		*(ptr + x + (YSIZE - 1 - cur_y) * ctx->lpr) = color;
 
 		if (x > 0 && ctx->features.solid_draw) {
-
-			int prev = (ctx->iter + x) % XSIZE;
-
-			UBYTE prev_y = *(array + prev * sizeof(Sample));
+			int prev_iter = (ctx->iter + x) % XSIZE;
+			int prev_y = *(array + prev_iter * sizeof(Sample));
 			
 			int diff = cur_y - prev_y;
 
-			if (diff < 0) {
-				plot_vertical(ctx, x, cur_y, prev_y, color);
-			} else if (diff > 0) {
-				plot_vertical(ctx, x, prev_y, cur_y, color);
+			if (diff) {
+    			int start = YSIZE - 1;
+	    		int finish;
+
+				start -= MAX(prev_y, cur_y);
+				finish = start + abs(diff);
+	    		plot_vertical(ctx, x, start, finish, color);
 			}
 		}
 	}
@@ -348,8 +360,7 @@ static void plot(Context *ctx, const UBYTE* const array, const ULONG color)
 /* Special function to plot 2-sided network graph */
 static void plot_net(Context *ctx)
 {
-	int x, y;
-	ULONG *ptr = (ULONG *)ctx->base_address + ctx->lpr * YSIZE;
+	int x;
 
 	UBYTE *ul = get_ptr(upload);
 	UBYTE *dl = get_ptr(download);
@@ -358,64 +369,52 @@ static void plot_net(Context *ctx)
 		int iter = (ctx->iter + 1 + x) % XSIZE;
 
 		// Upload, above the center line
-		int start_y = - *(ul + iter * sizeof(Sample)) / 2;
-		ULONG *_ptr = ptr + x + (YSIZE / 2 + start_y) * ctx->lpr;
+		int ul_level = *(ul + iter * sizeof(Sample)) / 2;
 
-		for (y = start_y; y < 0; y++) {
-			*_ptr = ctx->colors.upload;
-			_ptr += ctx->lpr;
-		}
+		int finish = YSIZE + YSIZE / 2;
+		int start = finish - ul_level;
 
+		plot_vertical(ctx, x, start, finish, ctx->colors.upload);
+		
 		// Download, below the center line
-		int end_y = *(dl + iter * sizeof(Sample)) / 2;
-		_ptr = ptr + x + (YSIZE / 2 + 1) * ctx->lpr;
+		int dl_level = *(dl + iter * sizeof(Sample)) / 2;
 
-		for (y = 1 ; y <= end_y; y++) {
-			*_ptr = ctx->colors.download;
-			_ptr += ctx->lpr;
-		}
+		finish = 2 * YSIZE - 1;
+		start = finish - dl_level;
+		
+		plot_vertical(ctx, x, start, finish, ctx->colors.download);
 	}
 }
 
 static void clear(Context *ctx)
 {
-	int x, y;
-	ULONG *ptr = ctx->base_address;
-
+	int y;
 	WORD height = ctx->window->Height - (ctx->window->BorderBottom + ctx->window->BorderTop);
 
 	for (y = 0; y < height; y++) {
-		for (x = 0; x < XSIZE; x++) {
-			ptr[x] = ctx->colors.background;
-		}
-
-		ptr += ctx->lpr;
+		plot_horizontal(ctx, y, 0, XSIZE - 1, ctx->colors.background);
 	}
 }
 
 static void draw_grid(Context *ctx)
 {
 	int x, y;
-    ULONG *ptr = ctx->base_address;
-
-	int total_height = (ctx->features.net) ? 2 * YSIZE : YSIZE;
+	int height = (ctx->features.net) ? 2 * YSIZE : YSIZE;
 
 	// Horizontal lines
-	for (y = 0; y < total_height; y += 10) {
-		for (x = 0; x < XSIZE; x++) {
-			ptr[x] = ctx->colors.grid;
+	for (y = 0; y < YSIZE; y += 10) {
+		plot_horizontal(ctx, y, 0, XSIZE - 1, ctx->colors.grid);
+	}
+
+	if (ctx->features.net) {
+		for (y = YSIZE; y < height; y += 10) {
+			plot_horizontal(ctx, y, 0, XSIZE - 1, ctx->colors.grid);
 		}
-		ptr += 10 * ctx->lpr;
 	}
 
 	// Vertical lines
 	for (x = 0; x < XSIZE; x += 60) {
-		ptr = (ULONG *)ctx->base_address + x;
-
-		for (y = 0; y < total_height; y++) {
-			*ptr = ctx->colors.grid;
-			ptr += ctx->lpr;
-		}
+		plot_vertical(ctx, x, 0, height - 1, ctx->colors.grid);
 	}
 }
 
