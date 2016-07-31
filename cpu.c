@@ -63,7 +63,7 @@ static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.6 (31.7
 
 #define WINDOW_TITLE_FORMAT "CPU: %3d%% V: %3d%% P: %3d%% G: %3d%%"
 #define SCREEN_TITLE_FORMAT \
-"CPU: %3d%% Virtual: %3d%% Public: %3d%% Graphics: %3d%% Download: %4.1fKB/s Upload: %4.1fKB/s Mode: %c"
+"CPU: %3d%% Virtual: %3d%% Public: %3d%% Graphics: %3d%% Download: %4.1fKiB/s Upload: %4.1fKiB/s Mode: %c"
 
 #define WINDOW_TITLE_LEN 64
 #define SCREEN_TITLE_LEN 128
@@ -204,11 +204,9 @@ static void my_launch(void)
 	GetSysTime(&idle_time.start);
 }
 
-static void idle_sleep(Context *ctx, struct TimeRequest *pause_req)
+static void idle_sleep(struct TimeRequest *pause_req)
 {
 	struct TimeVal dest, source;
-
-	ctx->run_count++;
 
 	GetSysTime(&dest);
 
@@ -275,7 +273,8 @@ static void idler(uint32 p1)
 
 	while (ctx->running) {
 		if (ctx->simple_mode) {
-			idle_sleep(ctx, pause_req);
+        	ctx->run_count++;
+			idle_sleep(pause_req);
 		}
 	}
 
@@ -546,11 +545,7 @@ static void handle_args(Context *ctx, int argc, char ** argv)
 		struct WBArg *wb_arg = wb_startup->sm_ArgList;
 
 		if (wb_arg /*&& wb_arg->wa_Lock*/) {
-			//BPTR old_dir = GetCurrentDir(/*wb_arg->wa_Lock*/);
-
 			read_config(ctx, wb_arg->wa_Name);
-
-			//CurrentDir(old_dir);
 		}
 	} else {
 		read_config(ctx, argv[0]);
@@ -678,15 +673,6 @@ static BOOL allocate_resources(Context *ctx)
 		printf("Couldn't open window\n");
 		goto clean;
 	}
-		
-	ctx->idle_task = CreateTaskTags("Uuno", 0, idler, 4096,
-		AT_Param1, ctx,
-		TAG_DONE);
-
-	if (!ctx->idle_task) {
-		printf("Couldn't create idler task\n");
-		goto clean;
-	}
 
 	ctx->window_title = my_alloc(WINDOW_TITLE_LEN);
 
@@ -699,6 +685,15 @@ static BOOL allocate_resources(Context *ctx)
 
 	if (!ctx->screen_title) {
 		printf("Couldn't allocate screen title\n");
+		goto clean;
+	}
+
+	ctx->idle_task = CreateTaskTags("Uuno", 0, idler, 4096,
+		AT_Param1, ctx,
+		TAG_DONE);
+
+	if (!ctx->idle_task) {
+		printf("Couldn't create idler task\n");
 		goto clean;
 	}
 
@@ -890,18 +885,14 @@ static void handle_timer_events(Context *ctx)
 
 	start_timer(ctx);
 
-	// Timer signal, update visuals once per second
-	//if ( (++count % FREQ) == 0)
-	{
-		++ctx->iter;
-		ctx->iter %= XSIZE;
+	++ctx->iter;
+	ctx->iter %= XSIZE;
 
-		measure_cpu(ctx);
-		measure_memory(ctx);
-		measure_network(ctx, &ctx->dl_speed, &ctx->ul_speed);
+	measure_cpu(ctx);
+	measure_memory(ctx);
+	measure_network(ctx, &ctx->dl_speed, &ctx->ul_speed);
 
-		refresh_window(ctx);
-   	}
+	refresh_window(ctx);
 }
 
 static void stop_timer(Context *ctx)
@@ -1053,8 +1044,6 @@ int main(int argc, char ** argv)
 {
 	Context ctx;
 	init_context(&ctx);
-
-	//printf("Quantum %d\n", ((struct ExecBase *)SysBase)->Quantum);
 
 	if (GfxBase->lib_Version < 54) {
 		printf("graphics.library V54 needed\n");
