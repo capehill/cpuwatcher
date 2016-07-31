@@ -16,7 +16,7 @@ Change log:
 - requires graphics.library V54
 - replaced deprecated system calls
 - fixed some task sync issues
-- removed pseudo transparency
+- replaced pseudo transparency with opaqueness parameter added (requires compositing)
 - code cleanup and refactoring
 - started a GitHub project
 
@@ -61,7 +61,8 @@ Change log:
 static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.6 (31.7.2016)";
 
 #define WINDOW_TITLE_FORMAT "CPU: %3d%% V: %3d%% P: %3d%% G: %3d%%"
-#define SCREEN_TITLE_FORMAT "CPU: %3d%% Virtual: %3d%% Public: %3d%% Graphics: %3d%% Download: %4.1fKB/s Upload: %4.1fKB/s Mode: %c"
+#define SCREEN_TITLE_FORMAT \
+"CPU: %3d%% Virtual: %3d%% Public: %3d%% Graphics: %3d%% Download: %4.1fKB/s Upload: %4.1fKB/s Mode: %c"
 
 #define WINDOW_TITLE_LEN 64
 #define SCREEN_TITLE_LEN 128
@@ -73,14 +74,14 @@ static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.6 (31.7
 #define YSIZE 101
 
 // Graph colors
-#define CPU_COL 	0x0000A000 // Green
-#define PUB_COL 	0x00FF1010 // Red
-#define VIRT_COL	0x001010FF // Blue
-#define VID_COL 	0x0010C0F0 // Brighter blue
-#define GRID_COL 	0x00003000 // Dark green
-#define DL_COL      0x0000A000 // Green
-#define UL_COL      0x00FF1010 // Red
-#define BG_COL		0x00000000
+#define CPU_COL 	0xFF00A000 // Green
+#define PUB_COL 	0xFFFF1010 // Red
+#define VIRT_COL	0xFF1010FF // Blue
+#define VID_COL 	0xFF10C0F0 // Brighter blue
+#define GRID_COL 	0xFF003000 // Dark green
+#define DL_COL      0xFF00A000 // Green
+#define UL_COL      0xFFFF1010 // Red
+#define BG_COL		0xFF000000
 
 extern struct Library *GfxBase;
 struct TimerIFace *ITimer = NULL;
@@ -93,7 +94,6 @@ typedef struct {
 	BOOL video_mem;
 	BOOL solid_draw;
 	BOOL net;
-	BOOL transparent;
 	BOOL dragbar;
 } Features;
 
@@ -146,11 +146,10 @@ typedef struct {
 	uint32 bytes_per_row;
 	uint32 lpr;
 		
-	// This set of flags controls which graphs are drawn
-	//ULONG show_bits;
-
 	int x_pos;
 	int y_pos;
+
+	UBYTE opaqueness;
 
      // Corresponds to seconds ran
 	ULONG iter;
@@ -471,19 +470,7 @@ static ULONG parse_hex(STRPTR str)
 {
 	return strtol(str, NULL, 16);
 }
-/*
-static void set_bit(struct DiskObject *disk_object, STRPTR name, Context *ctx, int bit)
-{
-	STRPTR tool_type = FindToolType(disk_object->do_ToolTypes, name);
-		
-	if (tool_type) {
-		//if (MatchToolValue(cpu, "True"))
-		{
-			ctx->show_bits |= bit;
-		}
-	}
-}
-*/
+
 static void set_int(struct DiskObject *disk_object, STRPTR name, int *value)
 {
 	STRPTR tool_type = FindToolType(disk_object->do_ToolTypes, name);
@@ -522,19 +509,22 @@ static void read_config(Context *ctx, STRPTR file_name)
 		struct DiskObject *disk_object = (struct DiskObject *)GetDiskObject(file_name);
 			
 		if (disk_object) {
+			int opaqueness = 255;
+
 			set_bool(disk_object, "cpu", &ctx->features.cpu);
 			set_bool(disk_object, "grid", &ctx->features.grid);
 			set_bool(disk_object, "pmem", &ctx->features.public_mem);
 			set_bool(disk_object, "vmem", &ctx->features.virtual_mem);
 			set_bool(disk_object, "gmem", &ctx->features.video_mem);
 			set_bool(disk_object, "solid", &ctx->features.solid_draw);
-			set_bool(disk_object, "transparent", &ctx->features.transparent);
 			set_bool(disk_object, "dragbar", &ctx->features.dragbar);
+			set_bool(disk_object, "simple", (BOOL *)&ctx->simple_mode);
 
 			set_int(disk_object, "xpos", &ctx->x_pos);
 			set_int(disk_object, "ypos", &ctx->y_pos);
-				
-			set_bool(disk_object, "simple", (BOOL *)&ctx->simple_mode);
+			set_int(disk_object, "opaqueness", &opaqueness);
+
+			ctx->opaqueness = opaqueness & 0xFF;
 				
 			set_color(disk_object, "cpucol", &ctx->colors.cpu);
 			set_color(disk_object, "bgcol", &ctx->colors.background);
@@ -588,11 +578,12 @@ static struct Window *open_window(Context *ctx, int x, int y)
 		WA_Top, y,
 		WA_InnerWidth, XSIZE,
 		WA_InnerHeight, (ctx->features.net) ? 2 * YSIZE : YSIZE,
-		WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_VANILLAKEY /*| IDCMP_CHANGEWINDOW*/,
+		WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_VANILLAKEY,
 		WA_CloseGadget, (ctx->features.dragbar) ? TRUE : FALSE,
 		WA_DragBar, (ctx->features.dragbar) ? TRUE : FALSE,
 		WA_DepthGadget, (ctx->features.dragbar) ? TRUE : FALSE,
 		WA_UserPort, ctx->user_port,
+		WA_Opaqueness, ctx->opaqueness,
 		TAG_DONE );
 }
 
@@ -614,21 +605,21 @@ static BOOL allocate_resources(Context *ctx)
 		goto clean;
 	}
 
-	ctx->bm = AllocBitMapTags( XSIZE, 2 * YSIZE, 32,
+	ctx->bm = AllocBitMapTags(XSIZE, 2 * YSIZE, 32,
 		BMATags_PixelFormat, PIXF_A8R8G8B8,
 		BMATags_Clear, TRUE,
 		BMATags_UserPrivate, TRUE,
-		TAG_DONE );
+		TAG_DONE);
 		
 	if (!ctx->bm) {
 		printf("Couln't allocate bitmap\n");
 		goto clean;
 	}
 
-	APTR lock = LockBitMapTags( ctx->bm,
+	APTR lock = LockBitMapTags(ctx->bm,
 		LBM_BaseAddress, &ctx->base_address,
 		LBM_BytesPerRow, &ctx->bytes_per_row,
-		TAG_DONE );
+		TAG_DONE);
 
 	if (lock) {
 		ctx->lpr = ctx->bytes_per_row / 4;
@@ -748,13 +739,6 @@ static void handle_keyboard(Context *ctx, UWORD key)
 			ctx->features.solid_draw ^= TRUE;
 			break;
 
-		case 't':
-			ctx->features.transparent ^= TRUE;
-			if (ctx->features.transparent) {
-				//TODO
-			}
-			break;
-
 		case 'm':
 			ctx->simple_mode ^= TRUE;
 			break;
@@ -767,7 +751,7 @@ static void handle_keyboard(Context *ctx, UWORD key)
 		case 'd':
 			ctx->features.dragbar ^= TRUE;
 
-			// Store old coordinates
+			// Remember old coordinates
 			const WORD x = ctx->window->LeftEdge;
 			const WORD y = ctx->window->TopEdge;
 
@@ -801,8 +785,7 @@ static void handle_keyboard(Context *ctx, UWORD key)
 static void handle_window_events(Context *ctx)
 {
 	struct IntuiMessage *msg;
-	while ((msg = (struct IntuiMessage *) GetMsg(ctx->window->UserPort)))
-	{
+	while ((msg = (struct IntuiMessage *) GetMsg(ctx->window->UserPort))) {
 		const ULONG event_class = msg->Class;
 		const UWORD event_code = msg->Code;
 
@@ -982,10 +965,17 @@ static void free_resources(Context *ctx)
 		FreeBitMap(ctx->bm);
 	}
 
-	if (ctx->window_title) my_free(ctx->window_title);
-	if (ctx->screen_title) my_free(ctx->screen_title);
+	if (ctx->window_title) {
+	    my_free(ctx->window_title);
+	}
 
-	if (ctx->samples) my_free(ctx->samples);
+	if (ctx->screen_title) {
+	    my_free(ctx->screen_title);
+	}
+
+	if (ctx->samples) {
+	    my_free(ctx->samples);
+	}
 }
 
 static void init_context(Context *ctx)
@@ -1016,6 +1006,8 @@ static void init_context(Context *ctx)
 	ctx->colors.background = BG_COL;
 	ctx->colors.upload = UL_COL;
 	ctx->colors.download = DL_COL;
+
+	ctx->opaqueness = 255;
 }
 
 static void main_loop(Context *ctx)
