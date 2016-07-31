@@ -10,39 +10,6 @@ Special thanks to Thomas Frieden, Olaf Barthel, Alex Carmona and Dave Fisher.
 TODO:
 - prefs editor
 
-Change log:
-
-0.6
-- requires graphics.library V54
-- replaced deprecated system calls
-- fixed some task sync issues
-- replaced pseudo transparency with opaqueness parameter (requires compositing)
-- dowload graph position changed
-- code cleanup and refactoring
-- started a GitHub project
-
-0.5
-- added tooltypes support
-- added a work around for extra blinkering when Intuition is set to "solid window dragging" mode (reported by AlexC)
-
-0.4
-- GCC 4.0.3
-- DSI fix
-- new icon
-
-0.3
-- network graphs
-- pseudo transparency
-- optional non-busy looping method for CPU measuring
-- dragbarless mode
-
-0.2
-- grid
-- keyboard commands
-
-0.1
-- initial version with CPU & memory graphs
-
 */
 
 #include <proto/exec.h>
@@ -485,10 +452,8 @@ static void set_int(struct DiskObject *disk_object, STRPTR name, int *value)
 static void set_bool(struct DiskObject *disk_object, STRPTR name, BOOL *value)
 {
 	STRPTR tool_type = FindToolType(disk_object->do_ToolTypes, name);
-		
-	if (tool_type) {
-		*value = TRUE;
-	}
+
+	*value = (tool_type) ? TRUE : FALSE;
 }
 
 static void set_color(struct DiskObject *disk_object, STRPTR name, ULONG *value)
