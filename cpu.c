@@ -58,7 +58,7 @@ Change log:
 #include <stdlib.h>
 #include <string.h>
 
-static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.6 (30.7.2016)";
+static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.6 (31.7.2016)";
 
 #define WINDOW_TITLE_FORMAT "CPU: %3d%% V: %3d%% P: %3d%% G: %3d%%"
 #define SCREEN_TITLE_FORMAT "CPU: %3d%% Virtual: %3d%% Public: %3d%% Graphics: %3d%% Download: %4.1fKB/s Upload: %4.1fKB/s Mode: %c"
@@ -82,19 +82,20 @@ static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.6 (30.7
 #define UL_COL      0x00FF1010 // Red
 #define BG_COL		0x00000000
 
-#define SHOW_CPU 	(1L << 0) // CPU
-#define SHOW_GRID 	(1L << 1) // Grid
-#define SHOW_PMEM 	(1L << 2) // Public Memory
-#define SHOW_VMEM   (1L << 3) // Virtual Memory
-#define SHOW_GMEM   (1L << 4) // Graphics/Video Memory
-#define SOLID_DRAW 	(1L << 5) // Toggles between dot/line drawing mode
-#define SHOW_NET    (1L << 6) // Net traffic graphs
-#define TRANSPARENT (1L << 7) // Pseudo tranparency
-#define DRAGBAR     (1L << 8) // Dragbar
-
-//extern struct Library *SysBase;
 extern struct Library *GfxBase;
 struct TimerIFace *ITimer = NULL;
+
+typedef struct {
+	BOOL cpu;
+	BOOL grid;
+	BOOL public_mem;
+	BOOL virtual_mem;
+	BOOL video_mem;
+	BOOL solid_draw;
+	BOOL net;
+	BOOL transparent;
+	BOOL dragbar;
+} Features;
 
 typedef struct {
 	ULONG cpu;
@@ -146,7 +147,7 @@ typedef struct {
 	uint32 lpr;
 		
 	// This set of flags controls which graphs are drawn
-	ULONG show_bits;
+	//ULONG show_bits;
 
 	int x_pos;
 	int y_pos;
@@ -167,6 +168,8 @@ typedef struct {
 	STRPTR window_title;
 	STRPTR screen_title;
 
+	Features features;
+
 	Colors colors;
 
 	Sample *samples;
@@ -176,59 +179,12 @@ typedef struct {
 
 } Context;
 
+#define get_ptr(name) &ctx->samples[0].name
+#define get_cur(name) ctx->samples[ctx->iter].name
+
 // network.c
 void init_netstats(void);
 BOOL update_netstats(UBYTE *, UBYTE *, float *, float *, float *, float *);
-
-static UBYTE *get_cpu_ptr(Context *ctx)
-{
-	return &ctx->samples[0].cpu;
-}
-
-static UBYTE *get_public_mem_ptr(Context *ctx)
-{
-	return &ctx->samples[0].public_mem;
-}
-
-static UBYTE *get_virtual_mem_ptr(Context *ctx)
-{
-	return &ctx->samples[0].virtual_mem;
-}
-
-static UBYTE *get_video_mem_ptr(Context *ctx)
-{
-	return &ctx->samples[0].video_mem;
-}
-
-static UBYTE *get_upload_ptr(Context *ctx)
-{
-	return &ctx->samples[0].upload;
-}
-
-static UBYTE *get_download_ptr(Context *ctx)
-{
-	return &ctx->samples[0].download;
-}
-
-static UBYTE cur_cpu(Context *ctx)
-{
-	return ctx->samples[ctx->iter].cpu;
-}
-
-static UBYTE cur_public_mem(Context *ctx)
-{
-	return ctx->samples[ctx->iter].public_mem;
-}
-
-static UBYTE cur_virtual_mem(Context *ctx)
-{
-	return ctx->samples[ctx->iter].virtual_mem;
-}
-
-static UBYTE cur_video_mem(Context *ctx)
-{
-	return ctx->samples[ctx->iter].video_mem;
-}
 
 // Idle task gives up CPU
 static void my_switch(void)
@@ -244,6 +200,26 @@ static void my_switch(void)
 static void my_launch(void)
 {
 	GetSysTime(&idle_time.start);
+}
+
+static void idle_sleep(Context *ctx, struct TimeRequest *pause_req)
+{
+	struct TimeVal dest, source;
+
+	ctx->run_count++;
+
+	GetSysTime(&dest);
+
+	source.Seconds = 0;
+	source.Microseconds = 10000;
+
+	AddTime(&dest, &source);
+
+	pause_req->Request.io_Command = TR_ADDREQUEST;
+	pause_req->Time.Seconds = dest.Seconds;
+	pause_req->Time.Microseconds = dest.Microseconds;
+
+	DoIO((struct IORequest *) pause_req);
 }
 
 static void idler(uint32 p1)
@@ -297,24 +273,7 @@ static void idler(uint32 p1)
 
 	while (ctx->running) {
 		if (ctx->simple_mode) {
- 			// When in "Simple" mode, pause for 1/100th of second
-
-			struct TimeVal dest, source;
-
-			ctx->run_count++;
-
-			GetSysTime( &dest );
-
-			source.Seconds = 0;
-			source.Microseconds = 10000;
-
-			AddTime(&dest, &source);
-
-			pause_req->Request.io_Command = TR_ADDREQUEST;
-			pause_req->Time.Seconds = dest.Seconds;
-			pause_req->Time.Microseconds = dest.Microseconds;
-
-			DoIO((struct IORequest *) pause_req);
+			idle_sleep(ctx, pause_req);
 		}
 	}
 
@@ -325,7 +284,6 @@ static void idler(uint32 p1)
 	Permit();
 
 die:
-
 	if (ctx->idle_sig != -1) {
 		FreeSignal( ctx->idle_sig );
 		ctx->idle_sig = -1;
@@ -371,7 +329,7 @@ static void plot(Context *ctx, const UBYTE* const array, const ULONG color)
 		// Plot the current level
 		*(ptr + x + (YSIZE - 1 - cur_y) * ctx->lpr) = color;
 
-		if (x > 0 && ctx->show_bits & SOLID_DRAW) {
+		if (x > 0 && ctx->features.solid_draw) {
 
 			int prev = (ctx->iter + x) % XSIZE;
 
@@ -394,8 +352,8 @@ static void plot_net(Context *ctx)
 	int x, y;
 	ULONG *ptr = (ULONG *)ctx->base_address + ctx->lpr * YSIZE;
 
-	UBYTE *ul = get_upload_ptr(ctx);
-	UBYTE *dl = get_download_ptr(ctx);
+	UBYTE *ul = get_ptr(upload);
+	UBYTE *dl = get_ptr(download);
 
 	for (x = 0; x < XSIZE; x++) {
 		int iter = (ctx->iter + 1 + x) % XSIZE;
@@ -441,7 +399,7 @@ static void draw_grid(Context *ctx)
 	int x, y;
     ULONG *ptr = ctx->base_address;
 
-	int total_height = (ctx->show_bits & SHOW_NET) ? 2 * YSIZE : YSIZE;
+	int total_height = (ctx->features.net) ? 2 * YSIZE : YSIZE;
 
 	// Horizontal lines
 	for (y = 0; y < total_height; y += 10) {
@@ -466,27 +424,27 @@ static void refresh_window(Context *ctx)
 {
 	clear(ctx);
 
-	if (ctx->show_bits & SHOW_GRID) {
+	if (ctx->features.grid) {
 		draw_grid(ctx);
 	}
 
-	if (ctx->show_bits & SHOW_PMEM) {
-		plot(ctx, get_public_mem_ptr(ctx), ctx->colors.public_mem );
+	if (ctx->features.public_mem) {
+		plot(ctx, get_ptr(public_mem), ctx->colors.public_mem);
 	}
 
-	if (ctx->show_bits & SHOW_VMEM) {
-		plot(ctx, get_virtual_mem_ptr(ctx), ctx->colors.virtual_mem );
+	if (ctx->features.virtual_mem) {
+		plot(ctx, get_ptr(virtual_mem), ctx->colors.virtual_mem);
 	}
 
-	if (ctx->show_bits & SHOW_GMEM) {
-		plot(ctx, get_video_mem_ptr(ctx), ctx->colors.video_mem );
+	if (ctx->features.video_mem) {
+		plot(ctx, get_ptr(video_mem), ctx->colors.video_mem);
 	}
 
-	if (ctx->show_bits & SHOW_CPU) {
-		plot(ctx, get_cpu_ptr(ctx), ctx->colors.cpu );
+	if (ctx->features.cpu) {
+		plot(ctx, get_ptr(cpu), ctx->colors.cpu);
 	}
 
-	if (ctx->show_bits & SHOW_NET) {
+	if (ctx->features.net) {
 		plot_net(ctx);
 	}
 
@@ -499,21 +457,21 @@ static void refresh_window(Context *ctx)
 		0xC0);
 
 	snprintf(ctx->window_title, WINDOW_TITLE_LEN, WINDOW_TITLE_FORMAT,
-		cur_cpu(ctx), cur_virtual_mem(ctx), cur_public_mem(ctx), cur_video_mem(ctx));
+		get_cur(cpu), get_cur(virtual_mem), get_cur(public_mem), get_cur(video_mem));
 
 	snprintf(ctx->screen_title, SCREEN_TITLE_LEN, SCREEN_TITLE_FORMAT,
-		cur_cpu(ctx), cur_virtual_mem(ctx), cur_public_mem(ctx), cur_video_mem(ctx),
+		get_cur(cpu), get_cur(virtual_mem), get_cur(public_mem), get_cur(video_mem),
 		ctx->dl_speed, ctx->ul_speed, ctx->simple_mode ? 'S' : 'B');
 
 	SetWindowTitles(ctx->window,
-	    (ctx->show_bits & DRAGBAR) ? ctx->window_title : NULL, ctx->screen_title);
+		(ctx->features.dragbar) ? ctx->window_title : NULL, ctx->screen_title);
 }
 
 static ULONG parse_hex(STRPTR str)
 {
 	return strtol(str, NULL, 16);
 }
-
+/*
 static void set_bit(struct DiskObject *disk_object, STRPTR name, Context *ctx, int bit)
 {
 	STRPTR tool_type = FindToolType(disk_object->do_ToolTypes, name);
@@ -525,7 +483,7 @@ static void set_bit(struct DiskObject *disk_object, STRPTR name, Context *ctx, i
 		}
 	}
 }
-
+*/
 static void set_int(struct DiskObject *disk_object, STRPTR name, int *value)
 {
 	STRPTR tool_type = FindToolType(disk_object->do_ToolTypes, name);
@@ -564,18 +522,14 @@ static void read_config(Context *ctx, STRPTR file_name)
 		struct DiskObject *disk_object = (struct DiskObject *)GetDiskObject(file_name);
 			
 		if (disk_object) {
-
-			ctx->show_bits = 0;
-
-			set_bit(disk_object, "cpu", ctx, SHOW_CPU);
-			set_bit(disk_object, "grid", ctx, SHOW_GRID);
-			set_bit(disk_object, "pmem", ctx, SHOW_PMEM);
-			set_bit(disk_object, "vmem", ctx, SHOW_VMEM);
-			set_bit(disk_object, "gmem", ctx, SHOW_GMEM);
-			set_bit(disk_object, "solid", ctx, SOLID_DRAW);
-			set_bit(disk_object, "transparent", ctx, TRANSPARENT);
-			set_bit(disk_object, "net", ctx, SHOW_NET);
-			set_bit(disk_object, "dragbar", ctx, DRAGBAR);
+			set_bool(disk_object, "cpu", &ctx->features.cpu);
+			set_bool(disk_object, "grid", &ctx->features.grid);
+			set_bool(disk_object, "pmem", &ctx->features.public_mem);
+			set_bool(disk_object, "vmem", &ctx->features.virtual_mem);
+			set_bool(disk_object, "gmem", &ctx->features.video_mem);
+			set_bool(disk_object, "solid", &ctx->features.solid_draw);
+			set_bool(disk_object, "transparent", &ctx->features.transparent);
+			set_bool(disk_object, "dragbar", &ctx->features.dragbar);
 
 			set_int(disk_object, "xpos", &ctx->x_pos);
 			set_int(disk_object, "ypos", &ctx->y_pos);
@@ -633,11 +587,11 @@ static struct Window *open_window(Context *ctx, int x, int y)
 		WA_Left, x,
 		WA_Top, y,
 		WA_InnerWidth, XSIZE,
-		WA_InnerHeight, (ctx->show_bits & SHOW_NET) ? 2 * YSIZE : YSIZE,
+		WA_InnerHeight, (ctx->features.net) ? 2 * YSIZE : YSIZE,
 		WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_VANILLAKEY /*| IDCMP_CHANGEWINDOW*/,
-		WA_CloseGadget, (ctx->show_bits & DRAGBAR) ? TRUE : FALSE,
-		WA_DragBar, (ctx->show_bits & DRAGBAR) ? TRUE : FALSE,
-		WA_DepthGadget, (ctx->show_bits & DRAGBAR) ? TRUE : FALSE,
+		WA_CloseGadget, (ctx->features.dragbar) ? TRUE : FALSE,
+		WA_DragBar, (ctx->features.dragbar) ? TRUE : FALSE,
+		WA_DepthGadget, (ctx->features.dragbar) ? TRUE : FALSE,
 		WA_UserPort, ctx->user_port,
 		TAG_DONE );
 }
@@ -771,32 +725,32 @@ static void handle_keyboard(Context *ctx, UWORD key)
 
 	switch (key) {
 		case 'c':
-			ctx->show_bits ^= SHOW_CPU;
+			ctx->features.cpu ^= TRUE;
 			break;
 
 		case 'p':
-			ctx->show_bits ^= SHOW_PMEM;
+			ctx->features.public_mem ^= TRUE;
 			break;
 
 		case 'v':
-			ctx->show_bits ^= SHOW_VMEM;
+			ctx->features.virtual_mem ^= TRUE;
 			break;
 
 		case 'x':
-			ctx->show_bits ^= SHOW_GMEM;
+			ctx->features.video_mem ^= TRUE;
 			break;
 
 		case 'g':
-			ctx->show_bits ^= SHOW_GRID;
+			ctx->features.grid ^= TRUE;
 			break;
 
 		case 's':
-			ctx->show_bits ^= SOLID_DRAW;
+			ctx->features.solid_draw ^= TRUE;
 			break;
 
 		case 't':
-			ctx->show_bits ^= TRANSPARENT;
-			if (ctx->show_bits & TRANSPARENT) {
+			ctx->features.transparent ^= TRUE;
+			if (ctx->features.transparent) {
 				//TODO
 			}
 			break;
@@ -806,12 +760,12 @@ static void handle_keyboard(Context *ctx, UWORD key)
 			break;
 
 		case 'n':
-			ctx->show_bits ^= SHOW_NET;
-			SizeWindow(ctx->window, 0, (ctx->show_bits & SHOW_NET) ? YSIZE : -YSIZE);
+			ctx->features.net ^= TRUE;
+			SizeWindow(ctx->window, 0, (ctx->features.net) ? YSIZE : -YSIZE);
 			break;
 
 		case 'd':
-			ctx->show_bits ^= DRAGBAR;
+			ctx->features.dragbar ^= TRUE;
 
 			// Store old coordinates
 			const WORD x = ctx->window->LeftEdge;
@@ -1025,7 +979,7 @@ static void free_resources(Context *ctx)
 	}
 
 	if (ctx->bm) {
-		FreeBitMap( ctx->bm );
+		FreeBitMap(ctx->bm);
 	}
 
 	if (ctx->window_title) my_free(ctx->window_title);
@@ -1043,9 +997,16 @@ static void init_context(Context *ctx)
 	ctx->main_sig = -1;
 	ctx->idle_sig = -1;
 
+	ctx->features.cpu = TRUE;
+	ctx->features.public_mem = TRUE;
+	ctx->features.virtual_mem = TRUE;
+	ctx->features.video_mem = TRUE;
+	ctx->features.solid_draw = TRUE;
+	ctx->features.dragbar = TRUE;
+	ctx->features.grid = TRUE;
+
 	ctx->running = TRUE;
 	ctx->timer_device = -1;
-	ctx->show_bits = SHOW_CPU | SHOW_GRID | SHOW_PMEM | SHOW_VMEM | SHOW_GMEM | SOLID_DRAW | DRAGBAR;
 
 	ctx->colors.cpu = CPU_COL;
 	ctx->colors.public_mem = PUB_COL;
