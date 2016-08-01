@@ -55,7 +55,7 @@ static BOOL get_counters(SBQUAD_T *in, SBQUAD_T *out)
 
 		printf("Could not query data throughput statistics.\n");
 		result = FALSE;
- 	}
+	}
 
 	return result;
 }
@@ -74,8 +74,8 @@ Recalculation should happen when a new peak in the transfers has happened.
 
 */
 BOOL update_netstats(
-    UBYTE *download, UBYTE *upload,
-    float *dl_multiplier, float *ul_multiplier,
+	UBYTE *download, UBYTE *upload,
+	float *dl_multiplier, float *ul_multiplier,
 	float *dl_speed, float *ul_speed)
 {
 	static ULONG max_sent;
@@ -83,7 +83,7 @@ BOOL update_netstats(
 
 	Sample sample;
 
-    ULONG received, sent;
+	ULONG received, sent;
 
 	BOOL redraw = FALSE;
 
@@ -95,7 +95,7 @@ BOOL update_netstats(
 		*dl_speed = 0;
 			
 		return FALSE;
- 	}
+	}
 
 	received = quad_delta(&sample.in, &last_sample.in);
 	sent = quad_delta(&sample.out, &last_sample.out);
@@ -106,7 +106,7 @@ BOOL update_netstats(
 		//printf("max_sent changes to %ld\n", sent);
 
 		*ul_multiplier = (float) max_sent / sent;
-        redraw = TRUE;
+		redraw = TRUE;
 		max_sent = sent;
 	}
 
@@ -118,25 +118,25 @@ BOOL update_netstats(
 		max_received = received;
 	}
 
-    // Scale the values to 0 ... 100
+	// Scale the values to 0 ... 100
 	if (max_sent > 0) {
 		*upload = 100.f * sent / max_sent;
 	} else {
-        *upload = 0;
-    }
+		*upload = 0;
+	}
 
 	if (max_received > 0) {
 		*download = 100.f * received / max_received;
 	} else {
-        *download = 0;
-    }
+		*download = 0;
+	}
 
-    // Calculate current up/down load speeds in Kilobytes
+	// Calculate current up/down load speeds in Kilobytes
 	*ul_speed = sent / 1024.f;
 	*dl_speed = received / 1024.f;
 
-    //printf("s %d r %d m %f\n", *download, *upload, *multiplier);
+	//printf("s %d r %d m %f\n", *download, *upload, *multiplier);
 
-    return redraw;
+	return redraw;
 }
 

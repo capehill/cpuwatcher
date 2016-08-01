@@ -42,13 +42,13 @@ static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.6 (31.7
 #define YSIZE 101
 
 // Graph colors
-#define CPU_COL 	0xFF00A000 // Green
-#define PUB_COL 	0xFFFF1010 // Red
+#define CPU_COL		0xFF00A000 // Green
+#define PUB_COL		0xFFFF1010 // Red
 #define VIRT_COL	0xFF1010FF // Blue
-#define VID_COL 	0xFF10C0F0 // Brighter blue
-#define GRID_COL 	0xFF003000 // Dark green
-#define DL_COL      0xFF00A000 // Green
-#define UL_COL      0xFFFF1010 // Red
+#define VID_COL		0xFF10C0F0 // Brighter blue
+#define GRID_COL	0xFF003000 // Dark green
+#define DL_COL		0xFF00A000 // Green
+#define UL_COL		0xFFFF1010 // Red
 #define BG_COL		0xFF000000
 
 extern struct Library *GfxBase;
@@ -119,17 +119,17 @@ typedef struct {
 
 	UBYTE opaqueness;
 
-     // Corresponds to seconds ran
+	 // Corresponds to seconds ran
 	ULONG iter;
 
 	volatile BOOL running;
 
 	volatile BOOL idler_trouble;
 
-    // Simple mode switches to non-busy looping option when measuring the CPU usage.
+	// Simple mode switches to non-busy looping option when measuring the CPU usage.
 	volatile BOOL simple_mode;
 
-    // How many times idle task was ran during 1 second. Run count 0 means 100% cpu usage, 100 means 0 % CPU usage
+	// How many times idle task was ran during 1 second. Run count 0 means 100% cpu usage, 100 means 0 % CPU usage
 	volatile ULONG run_count;
 
 	STRPTR window_title;
@@ -191,7 +191,7 @@ static void idle_sleep(struct TimeRequest *pause_req)
 
 static void idler(uint32 p1)
 {
-    // Used by idle task for 1/100 second pauses when running in non-busy looping mode
+	// Used by idle task for 1/100 second pauses when running in non-busy looping mode
 	struct TimeRequest *pause_req = NULL;
 	struct MsgPort *idle_port = NULL;
 	Context *ctx = (Context *)p1;
@@ -240,7 +240,7 @@ static void idler(uint32 p1)
 
 	while (ctx->running) {
 		if (ctx->simple_mode) {
-        	ctx->run_count++;
+			ctx->run_count++;
 			idle_sleep(pause_req);
 		}
 	}
@@ -312,12 +312,12 @@ static void plot(Context *ctx, const UBYTE* const array, const ULONG color)
 			int diff = cur_y - prev_y;
 
 			if (diff) {
-    			int start = YSIZE - 1;
-	    		int finish;
+				int start = YSIZE - 1;
+				int finish;
 
 				start -= MAX(prev_y, cur_y);
 				finish = start + abs(diff);
-	    		plot_vertical(ctx, x, start, finish, color);
+				plot_vertical(ctx, x, start, finish, color);
 			}
 		}
 	}
@@ -520,7 +520,7 @@ static void handle_args(Context *ctx, int argc, char ** argv)
 static void *my_alloc(size_t size)
 {
 	return AllocVecTags(size,
-	 	AVT_ClearWithValue, 0,
+		AVT_ClearWithValue, 0,
 		TAG_DONE);
 }
 
@@ -625,7 +625,7 @@ static BOOL allocate_resources(Context *ctx)
 	}
 
 	ITimer = (struct TimerIFace *) GetInterface(
-	    (struct Library *) ctx->timer_req->Request.io_Device, "main", 1, NULL);
+		(struct Library *) ctx->timer_req->Request.io_Device, "main", 1, NULL);
 		
 	if (!ITimer) {
 		printf("Couldn't get Timer interface\n");
@@ -738,7 +738,7 @@ static void handle_keyboard(Context *ctx, UWORD key)
 
 	if (update) {
 		refresh_window(ctx);
-    }
+	}
 }
 
 static void handle_window_events(Context *ctx)
@@ -872,10 +872,10 @@ static void wait_for_idler(Context *ctx)
 {
 	// if idler task had problems, don't wait for it
 	if (ctx->idle_task && !ctx->idler_trouble) {
-	    // Give it some more cpu
+		// Give it some more cpu
 		SetTaskPri(ctx->idle_task, 0);
 
-	 	// Wait idler task to finish possible timer actions before closing timing services
+		// Wait idler task to finish possible timer actions before closing timing services
 		Wait(1L << ctx->main_sig | SIGBREAKF_CTRL_C);
 	}
 }
@@ -921,15 +921,15 @@ static void free_resources(Context *ctx)
 	}
 
 	if (ctx->window_title) {
-	    my_free(ctx->window_title);
+		my_free(ctx->window_title);
 	}
 
 	if (ctx->screen_title) {
-	    my_free(ctx->screen_title);
+		my_free(ctx->screen_title);
 	}
 
 	if (ctx->samples) {
-	    my_free(ctx->samples);
+		my_free(ctx->samples);
 	}
 }
 
