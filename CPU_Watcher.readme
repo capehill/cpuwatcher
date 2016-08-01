@@ -8,6 +8,15 @@ at priority -127. Task's execution time is measured and
 the system load is determined, based on how much time
 "Uuno" got during a time period (which is 1 second).
 
+There is actually two methods to measure CPU load. Default
+mode uses busy looping. Optional "simple" mode doesn't
+busy loop but it may not be as accurate. Screen's titlebar
+shows "B" for the busy looping method, and "S" for the
+simpler method.
+
+Running both CPU Watcher and CPUClock.docky at the same time
+may not be reliable.
+
 
 Features:
 
@@ -24,19 +33,51 @@ Features:
 	* Current Kilobyte values are shown in Screen's titlebar
 	The graphs show current/peak * 100% value.
 
-- supported tooltypes:
+- supported icon tooltypes:
 
+	cpu: cpu graph ON/OFF.
 
-Keyboard commands:
+	pmem: public memory graph ON/OFF.
+
+	vmem: virtual memory graph ON/OFF.
+
+	gmem: gfx/video memory graph ON/OFF.
+
+	grid: grid ON/OFF.	  
+
+	solid: solid drawing ON/OFF.
+
+	dragbar: window dragbar ON/OFF.
+
+	xpos: window x position.
+
+	ypos: window y position.
+
+	simple: use "simple" method to measure CPU load.
+
+	opaqueness: values < 255 adjust window transparency.
+	
+	bgcol: window background color.
+
+	gridcol: grid color.
+
+	cpucol: cpu graph color.
+	
+	pmemcol: public memory graph color.
+	
+	vmemcol: virtual memory graph color.
+	
+	gmemcol: gfx memory graph color.
+	
+	ulcol: upload graph color.
+	
+	dlcol: download graph color.
+
+- keyboard commands:
 
 	c - cpu graph ON/OFF.
 
-	m - toggle between CPU measuring modes. Default mode uses busylooping,
-		more accurate method (described above). Optional "Simple" mode
-		doesn't busyloop, but it may not be as accurate.
-
-		Screen's titlebar shows "B" for the busylooping method, and "S"
-		for the simpler method.
+	m - toggle between CPU measuring modes, "busy" and "simple".
 
 	p - public memory graph ON/OFF.
 
@@ -53,14 +94,6 @@ Keyboard commands:
 	n - network graphs ON/OFF.
 
 	q - quit program.
-
-
-Running both CPU Watcher and CPUClock.docky at the same time may not be reliable.
-
-
-ToDo list:
-
-	- prefs editor for better configuration
 
 Thanks to:
 
