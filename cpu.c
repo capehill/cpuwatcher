@@ -51,6 +51,9 @@ static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.6 (2.8.
 #define UL_COL		0xFFFF1010 // Red
 #define BG_COL		0xFF000000
 
+#define MAX_OPAQUENESS 255
+#define MIN_OPAQUENESS 20
+
 extern struct Library *GfxBase;
 struct TimerIFace *ITimer = NULL;
 
@@ -472,10 +475,10 @@ static void set_color(struct DiskObject *disk_object, STRPTR name, ULONG *value)
 
 static UBYTE validate_opaqueness(int opaqueness)
 {
-	if (opaqueness > 255) {
-		opaqueness = 255;
-	} else if (opaqueness < 10) {
-		opaqueness = 10;
+	if (opaqueness > MAX_OPAQUENESS) {
+		opaqueness = MAX_OPAQUENESS;
+	} else if (opaqueness < MIN_OPAQUENESS) {
+		opaqueness = MIN_OPAQUENESS;
 	}
 
 	return opaqueness;
@@ -497,6 +500,7 @@ static void read_config(Context *ctx, STRPTR file_name)
 			set_bool(disk_object, "gmem", &ctx->features.video_mem);
 			set_bool(disk_object, "solid", &ctx->features.solid_draw);
 			set_bool(disk_object, "dragbar", &ctx->features.dragbar);
+			set_bool(disk_object, "net", &ctx->features.net);
 			set_bool(disk_object, "simple", (BOOL *)&ctx->simple_mode);
 
 			set_int(disk_object, "xpos", &ctx->x_pos);

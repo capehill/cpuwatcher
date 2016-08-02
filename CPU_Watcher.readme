@@ -55,7 +55,7 @@ Features:
 
 	simple: use "simple" method to measure CPU load.
 
-	opaqueness: values between [10, 255] adjust window transparency.
+	opaqueness: values between [20, 255] adjust window transparency.
 	
 	bgcol: window background color.
 
