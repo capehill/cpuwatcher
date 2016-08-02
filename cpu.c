@@ -26,7 +26,7 @@ TODO:
 #include <stdlib.h>
 #include <string.h>
 
-static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.6 (31.7.2016)";
+static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.6 (2.8.2016)";
 
 #define WINDOW_TITLE_FORMAT "CPU: %3d%% V: %3d%% P: %3d%% G: %3d%%"
 #define SCREEN_TITLE_FORMAT \
@@ -272,6 +272,13 @@ die:
 	Wait(0L);
 }
 
+static void plot_dot(Context *ctx, int x, int y, ULONG color)
+{
+	ULONG *ptr = (ULONG *)ctx->base_address + x + y * ctx->lpr;
+
+	*ptr = color;
+}
+
 static void plot_vertical(Context *ctx, int x, int start, int end, ULONG color)
 {
 	int y;
@@ -296,27 +303,25 @@ static void plot_horizontal(Context *ctx, int y, int start, int end, ULONG color
 static void plot(Context *ctx, const UBYTE* const array, const ULONG color)
 {
 	int x;
-	ULONG *ptr = ctx->base_address;
+	int bottom = YSIZE - 1;
 
 	for (x = 0; x < XSIZE; x++) {
 		int iter = (ctx->iter + 1 + x) % XSIZE;		   
 		int cur_y = *(array + iter * sizeof(Sample));
 
 		// Plot the current level
-		*(ptr + x + (YSIZE - 1 - cur_y) * ctx->lpr) = color;
+		plot_dot(ctx, x, bottom - cur_y, color);
 
 		if (x > 0 && ctx->features.solid_draw) {
 			int prev_iter = (ctx->iter + x) % XSIZE;
 			int prev_y = *(array + prev_iter * sizeof(Sample));
-			
+				
 			int diff = cur_y - prev_y;
 
 			if (diff) {
-				int start = YSIZE - 1;
-				int finish;
-
-				start -= MAX(prev_y, cur_y);
-				finish = start + abs(diff);
+				int start = bottom - MAX(prev_y, cur_y);
+				int finish = start + abs(diff);
+				
 				plot_vertical(ctx, x, start, finish, color);
 			}
 		}
@@ -465,6 +470,17 @@ static void set_color(struct DiskObject *disk_object, STRPTR name, ULONG *value)
 	}
 }
 
+static UBYTE validate_opaqueness(int opaqueness)
+{
+	if (opaqueness > 255) {
+		opaqueness = 255;
+	} else if (opaqueness < 10) {
+		opaqueness = 10;
+	}
+
+	return opaqueness;
+}
+
 static void read_config(Context *ctx, STRPTR file_name)
 {
 	if (file_name) {
@@ -487,7 +503,7 @@ static void read_config(Context *ctx, STRPTR file_name)
 			set_int(disk_object, "ypos", &ctx->y_pos);
 			set_int(disk_object, "opaqueness", &opaqueness);
 
-			ctx->opaqueness = opaqueness & 0xFF;
+			ctx->opaqueness = validate_opaqueness(opaqueness);
 				
 			set_color(disk_object, "cpucol", &ctx->colors.cpu);
 			set_color(disk_object, "bgcol", &ctx->colors.background);
