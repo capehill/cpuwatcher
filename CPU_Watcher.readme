@@ -8,7 +8,7 @@ at priority -127. Task's execution time is measured and
 the system load is determined, based on how much time
 "Uuno" got during a time period (which is 1 second).
 
-There is actually two methods to measure CPU load. Default
+There are actually two methods to measure CPU load. Default
 mode uses busy looping. Optional "simple" mode doesn't
 busy loop but it may not be as accurate. Screen's titlebar
 shows "B" for the busy looping method, and "S" for the
@@ -31,7 +31,7 @@ Features:
 	* upload speed (upper, red graph)
 	* download speed (lower, green graph)
 	* Current Kilobyte values are shown in Screen's titlebar
-	The graphs show current/peak * 100% value.
+	The graphs show current / peak * 100% value.
 
 - supported icon tooltypes:
 
@@ -49,13 +49,13 @@ Features:
 
 	dragbar: window dragbar ON/OFF.
 
-	xpos: window x position.
+	xpos: window X position.
 
-	ypos: window y position.
+	ypos: window Y position.
 
 	simple: use "simple" method to measure CPU load.
 
-	opaqueness: values < 255 adjust window transparency.
+	opaqueness: values between [10, 255] adjust window transparency.
 	
 	bgcol: window background color.
 
