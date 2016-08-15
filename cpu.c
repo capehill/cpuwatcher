@@ -177,6 +177,7 @@ static void my_launch(void)
 static void idle_sleep(struct TimeRequest *pause_req)
 {
 	struct TimeVal dest, source;
+	BYTE error;
 
 	GetSysTime(&dest);
 
@@ -189,7 +190,11 @@ static void idle_sleep(struct TimeRequest *pause_req)
 	pause_req->Time.Seconds = dest.Seconds;
 	pause_req->Time.Microseconds = dest.Microseconds;
 
-	DoIO((struct IORequest *) pause_req);
+	error = DoIO((struct IORequest *) pause_req);
+
+	if (error) {
+		DebugPrintF("DoIO returned %d\n", error);
+	}
 }
 
 static void idler(uint32 p1)
@@ -866,7 +871,15 @@ static void start_timer(Context *ctx)
 
 static void handle_timer_events(Context *ctx)
 {
-	GetMsg(ctx->timer_port);
+	struct Message *msg;
+
+	while ((msg = GetMsg(ctx->timer_port))) {
+		int8 error = ((struct IORequest *)msg)->io_Error;
+
+		if (error) {
+			printf("message received with code %d\n", error);
+		}
+	}
 
 	start_timer(ctx);
 
