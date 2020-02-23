@@ -6,7 +6,7 @@ cpu: $(OBJS)
 	strip $(NS) -o $@
 	
 %.o : %.c
-	gcc -Wall -g -O2 -D__USE_INLINE__ -c $<
+	gcc -Wall -gstabs -O2 -D__USE_INLINE__ -c $<
 
 clean:
 	delete #?.o
