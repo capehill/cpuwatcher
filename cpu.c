@@ -26,7 +26,7 @@ TODO:
 #include <stdlib.h>
 #include <string.h>
 
-static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.6 (2.8.2016)";
+static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.7 (23.2.2020)";
 
 #define WINDOW_TITLE_FORMAT "CPU: %3d%% V: %3d%% P: %3d%% G: %3d%%"
 #define SCREEN_TITLE_FORMAT \
@@ -99,6 +99,8 @@ static IdleTime idle_time;
 typedef struct {
 	struct Window *window;
 	struct BitMap *bm;
+	struct RastPort rastPort;
+
 	struct MsgPort *timer_port;
 	struct MsgPort *user_port;
 
@@ -282,13 +284,18 @@ die:
 
 static void plot_dot(Context *ctx, int x, int y, ULONG color)
 {
+#if 0
 	ULONG *ptr = (ULONG *)ctx->base_address + x + y * ctx->lpr;
 
 	*ptr = color;
+#else
+	WritePixelColor(&ctx->rastPort, x, y, color);
+#endif
 }
 
 static void plot_vertical(Context *ctx, int x, int start, int end, ULONG color)
 {
+#if 0
 	int y;
 	ULONG *ptr = (ULONG *)ctx->base_address + x + start * ctx->lpr;
 
@@ -296,16 +303,27 @@ static void plot_vertical(Context *ctx, int x, int start, int end, ULONG color)
 		*ptr = color;
 		ptr += ctx->lpr;
 	}
+#else
+	Move(&ctx->rastPort, x, start);
+	SetRPAttrs(&ctx->rastPort, RPTAG_APenColor, color, TAG_DONE);
+	Draw(&ctx->rastPort, x, end);
+#endif
 }
 
 static void plot_horizontal(Context *ctx, int y, int start, int end, ULONG color)
 {
+#if 0
 	int x;
 	ULONG *ptr = (ULONG *)ctx->base_address + y * ctx->lpr;
 
 	for (x = start; x <= end; x++) {
 		ptr[x] = color;
 	}
+#else
+	Move(&ctx->rastPort, start, y);
+	SetRPAttrs(&ctx->rastPort, RPTAG_APenColor, color, TAG_DONE);
+	Draw(&ctx->rastPort, end, y);
+#endif
 }
 
 static void plot(Context *ctx, const UBYTE* const array, const ULONG color)
@@ -367,12 +385,17 @@ static void plot_net(Context *ctx)
 
 static void clear(Context *ctx)
 {
+#if 0
 	int y;
 	WORD height = ctx->window->Height - (ctx->window->BorderBottom + ctx->window->BorderTop);
 
 	for (y = 0; y < height; y++) {
 		plot_horizontal(ctx, y, 0, XSIZE - 1, ctx->colors.background);
 	}
+#else
+	WORD height = ctx->features.net ? 2 * YSIZE : YSIZE;
+	RectFillColor(&ctx->rastPort, 0, 0, XSIZE - 1, height - 1, ctx->colors.background);
+#endif
 }
 
 static void draw_grid(Context *ctx)
@@ -612,6 +635,9 @@ static BOOL allocate_resources(Context *ctx)
 		printf("Lock failed\n");
 		goto clean;
 	}
+
+	InitRastPort(&ctx->rastPort);
+	ctx->rastPort.BitMap = ctx->bm;
 
 	ctx->user_port = AllocSysObjectTags(ASOT_PORT,
 		ASOPORT_Name, "user_port",
