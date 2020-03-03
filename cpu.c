@@ -1,6 +1,6 @@
 /*
 
-CPU Watcher 0.6 by Juha Niemimäki (c) 2005 - 2016
+CPU Watcher 0.7 by Juha Niemimäki (c) 2005 - 2020
 
 - measures CPU, free memory and network traffic.
 
@@ -25,6 +25,7 @@ TODO:
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.7 (23.2.2020)";
 
@@ -101,6 +102,12 @@ typedef struct {
 	struct BitMap *bm;
 	struct RastPort rastPort;
 
+	ULONG width;
+	ULONG height;
+
+	float scaleX;
+	float scaleY;
+
 	struct MsgPort *timer_port;
 	struct MsgPort *user_port;
 
@@ -114,10 +121,6 @@ typedef struct {
 		
 	BYTE timer_device;
 	struct TimeVal tv;
-		
-	APTR base_address;
-	uint32 bytes_per_row;
-	uint32 lpr;
 		
 	int x_pos;
 	int y_pos;
@@ -155,6 +158,9 @@ typedef struct {
 #define get_cur(name) ctx->samples[ctx->iter].name
 
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
+
+#define SCALE_X(x) roundf((x) * ctx->scaleX)
+#define SCALE_Y(y) roundf((y) * ctx->scaleY)
 
 // network.c
 void init_netstats(void);
@@ -282,141 +288,91 @@ die:
 	Wait(0L);
 }
 
-static void plot_dot(Context *ctx, int x, int y, ULONG color)
-{
 #if 0
-	ULONG *ptr = (ULONG *)ctx->base_address + x + y * ctx->lpr;
-
-	*ptr = color;
-#else
+static void point(Context *ctx, int x, int y, ULONG color)
+{
 	WritePixelColor(&ctx->rastPort, x, y, color);
-#endif
 }
 
-static void plot_vertical(Context *ctx, int x, int start, int end, ULONG color)
+static void line(Context *ctx, int sx, int sy, int fx, int fy, ULONG color)
 {
-#if 0
-	int y;
-	ULONG *ptr = (ULONG *)ctx->base_address + x + start * ctx->lpr;
+	Move(&ctx->rastPort, sx, sy);
+	SetRPAttrs(&ctx->rastPort, RPTAG_APenColor, color, TAG_DONE);
+	Draw(&ctx->rastPort, fx, fy);
+}
+#endif
 
-	for (y = start; y <= end; y++) {
-		*ptr = color;
-		ptr += ctx->lpr;
-	}
-#else
+static void vertical_line(Context *ctx, int x, int start, int end, ULONG color)
+{
 	Move(&ctx->rastPort, x, start);
 	SetRPAttrs(&ctx->rastPort, RPTAG_APenColor, color, TAG_DONE);
 	Draw(&ctx->rastPort, x, end);
-#endif
 }
 
-static void plot_horizontal(Context *ctx, int y, int start, int end, ULONG color)
+static void horizontal_line(Context *ctx, int y, int start, int end, ULONG color)
 {
-#if 0
-	int x;
-	ULONG *ptr = (ULONG *)ctx->base_address + y * ctx->lpr;
-
-	for (x = start; x <= end; x++) {
-		ptr[x] = color;
-	}
-#else
 	Move(&ctx->rastPort, start, y);
 	SetRPAttrs(&ctx->rastPort, RPTAG_APenColor, color, TAG_DONE);
 	Draw(&ctx->rastPort, end, y);
-#endif
+}
+
+static void line_to(Context *ctx, int x, int y, ULONG color)
+{
+	SetRPAttrs(&ctx->rastPort, RPTAG_APenColor, color, TAG_DONE);
+	Draw(&ctx->rastPort, x, y);
 }
 
 static void plot(Context *ctx, const UBYTE* const array, const ULONG color)
 {
-	int x;
-	int bottom = YSIZE - 1;
+	int	x;
+	const int bottom = YSIZE - 1;
 
 	for (x = 0; x < XSIZE; x++) {
-		int iter = (ctx->iter + 1 + x) % XSIZE;		   
-		int cur_y = *(array + iter * sizeof(Sample));
+		const int iter = (ctx->iter + 1 + x) % XSIZE;
+		const int level = *(array + iter * sizeof(Sample));
+		const int y = bottom - level;
 
-		// Plot the current level
-		plot_dot(ctx, x, bottom - cur_y, color);
-
-		if (x > 0 && ctx->features.solid_draw) {
-			int prev_iter = (ctx->iter + x) % XSIZE;
-			int prev_y = *(array + prev_iter * sizeof(Sample));
-				
-			int diff = cur_y - prev_y;
-
-			if (diff) {
-				int start = bottom - MAX(prev_y, cur_y);
-				int finish = start + abs(diff);
-				
-				plot_vertical(ctx, x, start, finish, color);
-			}
+		if (x == 0) {
+			Move(&ctx->rastPort, SCALE_X(x), SCALE_Y(y));
+		} else {
+			line_to(ctx, SCALE_X(x), SCALE_Y(y), color);
 		}
 	}
 }
 
-/* Special function to plot 2-sided network graph */
-static void plot_net(Context *ctx)
+static void plot_net(Context *ctx, UBYTE *array, const int bottom, const ULONG color)
 {
 	int x;
-
-	UBYTE *ul = get_ptr(upload);
-	UBYTE *dl = get_ptr(download);
-
 	for (x = 0; x < XSIZE; x++) {
-		int iter = (ctx->iter + 1 + x) % XSIZE;
+		const int iter = (ctx->iter + 1 + x) % XSIZE;
+		const int level = *(array + iter * sizeof(Sample)) / 2;
+		const int start = bottom - level;
 
-		// Upload, above the center line
-		int ul_level = *(ul + iter * sizeof(Sample)) / 2;
-
-		int finish = YSIZE + YSIZE / 2;
-		int start = finish - ul_level;
-
-		plot_vertical(ctx, x, start, finish, ctx->colors.upload);
-		
-		// Download, below the center line
-		int dl_level = *(dl + iter * sizeof(Sample)) / 2;
-
-		finish = 2 * YSIZE - 1;
-		start = finish - dl_level;
-		
-		plot_vertical(ctx, x, start, finish, ctx->colors.download);
+		if (x == 0) {
+			Move(&ctx->rastPort, SCALE_X(x), SCALE_Y(start));
+		} else {
+			line_to(ctx, SCALE_X(x), SCALE_Y(start), color);
+		}
 	}
 }
 
 static void clear(Context *ctx)
 {
-#if 0
-	int y;
-	WORD height = ctx->window->Height - (ctx->window->BorderBottom + ctx->window->BorderTop);
-
-	for (y = 0; y < height; y++) {
-		plot_horizontal(ctx, y, 0, XSIZE - 1, ctx->colors.background);
-	}
-#else
-	WORD height = ctx->features.net ? 2 * YSIZE : YSIZE;
-	RectFillColor(&ctx->rastPort, 0, 0, XSIZE - 1, height - 1, ctx->colors.background);
-#endif
+	RectFillColor(&ctx->rastPort, 0, 0, ctx->width - 1, ctx->height - 1, ctx->colors.background);
 }
 
 static void draw_grid(Context *ctx)
 {
-	int x, y;
-	int height = (ctx->features.net) ? 2 * YSIZE : YSIZE;
+	float y;
+	const float step = (ctx->features.net) ? ctx->height / 20.f : ctx->height / 10.f;
 
-	// Horizontal lines
-	for (y = 0; y < YSIZE; y += 10) {
-		plot_horizontal(ctx, y, 0, XSIZE - 1, ctx->colors.grid);
+	for (y = 0; y < ctx->height; y += step) {
+		horizontal_line(ctx, y, 0, ctx->width - 1, ctx->colors.grid);
 	}
 
-	if (ctx->features.net) {
-		for (y = YSIZE; y < height; y += 10) {
-			plot_horizontal(ctx, y, 0, XSIZE - 1, ctx->colors.grid);
-		}
-	}
-
-	// Vertical lines
-	for (x = 0; x < XSIZE; x += 60) {
-		plot_vertical(ctx, x, 0, height - 1, ctx->colors.grid);
+	float x;
+	for (x = 0; x < ctx->width; x+= ctx->width / 5.f) {
+		vertical_line(ctx, x, 0, ctx->height - 1, ctx->colors.grid);
 	}
 }
 
@@ -445,7 +401,8 @@ static void refresh_window(Context *ctx)
 	}
 
 	if (ctx->features.net) {
-		plot_net(ctx);
+		plot_net(ctx, get_ptr(upload), YSIZE + YSIZE / 2, ctx->colors.upload);
+		plot_net(ctx, get_ptr(download), 2 * YSIZE - 1, ctx->colors.download);
 	}
 
 	BltBitMapRastPort(ctx->bm, 0, 0,
@@ -533,6 +490,8 @@ static void read_config(Context *ctx, STRPTR file_name)
 
 			set_int(disk_object, "xpos", &ctx->x_pos);
 			set_int(disk_object, "ypos", &ctx->y_pos);
+			//set_int(disk_object, "width", &ctx->width); TODO?
+			//set_int(disk_object, "height", &ctx->height);
 			set_int(disk_object, "opaqueness", &opaqueness);
 
 			ctx->opaqueness = validate_opaqueness(opaqueness);
@@ -579,19 +538,93 @@ static void my_free(void *ptr)
 
 static struct Window *open_window(Context *ctx, int x, int y)
 {
-	return OpenWindowTags( NULL,
+	const int minWidth = XSIZE;
+	const int minHeight = (ctx->features.net) ? 2 * YSIZE : YSIZE;
+
+	int width = minWidth;
+	int height = minHeight;
+
+	if (ctx->window) {
+		// Window is using WA_UserPort, so CloseWindow() will do CloseWindowSafely()
+		width = ctx->width;
+		height = ctx->height;
+
+		CloseWindow(ctx->window);
+		ctx->window = NULL;
+	}
+
+	struct Window * window = OpenWindowTags( NULL,
 		//WA_Title, "CPU Watcher",
 		WA_Left, x,
 		WA_Top, y,
-		WA_InnerWidth, XSIZE,
-		WA_InnerHeight, (ctx->features.net) ? 2 * YSIZE : YSIZE,
-		WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_VANILLAKEY,
+		WA_InnerWidth, width,
+		WA_InnerHeight, height,
+		WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_VANILLAKEY | IDCMP_NEWSIZE,
 		WA_CloseGadget, (ctx->features.dragbar) ? TRUE : FALSE,
 		WA_DragBar, (ctx->features.dragbar) ? TRUE : FALSE,
 		WA_DepthGadget, (ctx->features.dragbar) ? TRUE : FALSE,
+        WA_SizeGadget, TRUE,
 		WA_UserPort, ctx->user_port,
 		WA_Opaqueness, ctx->opaqueness,
+		//WA_SimpleRefresh, TRUE,
 		TAG_DONE );
+
+	if (window) {
+		if (!WindowLimits(window, minWidth + window->BorderLeft + window->BorderRight,
+			minHeight + window->BorderTop + window->BorderBottom, 800, 600)) {
+			puts("Failed to set window limits");
+		}
+	}
+
+	return window;
+}
+
+static void query_window_size(Context *ctx)
+{
+	if ((GetWindowAttrs(ctx->window,
+		WA_InnerWidth, &ctx->width,
+		WA_InnerHeight, &ctx->height,
+		TAG_DONE)) != 0)
+	{
+			printf("Failed get window attributes\n");
+	}
+
+	ctx->scaleX = (float)ctx->width / XSIZE;
+	ctx->scaleY = (float)ctx->height / (ctx->features.net ? 2 * YSIZE : YSIZE);
+}
+
+static BOOL realloc_bitmap(Context *ctx)
+{
+	const ULONG w = GetBitMapAttr(ctx->bm, BMA_ACTUALWIDTH);
+	const ULONG h = GetBitMapAttr(ctx->bm, BMA_HEIGHT);
+
+	query_window_size(ctx);
+
+	if (!ctx->bm || w < ctx->width || h < ctx->height) {
+		if (ctx->bm) {
+    		FreeBitMap(ctx->bm);
+		}
+
+		ctx->bm = AllocBitMapTags(ctx->width, ctx->height, 32,
+    		BMATags_PixelFormat, PIXF_A8R8G8B8,
+    		BMATags_Clear, TRUE,
+#if 0 // There doesn't seem to be much difference whether bitmap is in RAM or VRAM
+            BMATags_Displayable, TRUE,
+#else
+    		BMATags_UserPrivate, TRUE,
+#endif
+    		TAG_DONE);
+
+    	if (!ctx->bm) {
+    		printf("Couln't allocate bitmap\n");
+    		return FALSE;
+    	}
+
+    	InitRastPort(&ctx->rastPort);
+    	ctx->rastPort.BitMap = ctx->bm;
+    }
+
+    return TRUE;
 }
 
 static BOOL allocate_resources(Context *ctx)
@@ -611,33 +644,6 @@ static BOOL allocate_resources(Context *ctx)
 		printf("Couldn't allocate sample data\n");
 		goto clean;
 	}
-
-	ctx->bm = AllocBitMapTags(XSIZE, 2 * YSIZE, 32,
-		BMATags_PixelFormat, PIXF_A8R8G8B8,
-		BMATags_Clear, TRUE,
-		BMATags_UserPrivate, TRUE,
-		TAG_DONE);
-		
-	if (!ctx->bm) {
-		printf("Couln't allocate bitmap\n");
-		goto clean;
-	}
-
-	APTR lock = LockBitMapTags(ctx->bm,
-		LBM_BaseAddress, &ctx->base_address,
-		LBM_BytesPerRow, &ctx->bytes_per_row,
-		TAG_DONE);
-
-	if (lock) {
-		ctx->lpr = ctx->bytes_per_row / 4;
-		UnlockBitMap(lock);
-	} else {
-		printf("Lock failed\n");
-		goto clean;
-	}
-
-	InitRastPort(&ctx->rastPort);
-	ctx->rastPort.BitMap = ctx->bm;
 
 	ctx->user_port = AllocSysObjectTags(ASOT_PORT,
 		ASOPORT_Name, "user_port",
@@ -704,6 +710,13 @@ static BOOL allocate_resources(Context *ctx)
 		goto clean;
 	}
 
+    realloc_bitmap(ctx);
+
+	if (!ctx->bm) {
+		printf("Couln't allocate bitmap\n");
+		goto clean;
+	}
+
 	ctx->idle_task = CreateTaskTags("Uuno", 0, idler, 4096,
 		AT_Param1, ctx,
 		TAG_DONE);
@@ -755,7 +768,8 @@ static void handle_keyboard(Context *ctx, UWORD key)
 
 		case 'n':
 			ctx->features.net ^= TRUE;
-			SizeWindow(ctx->window, 0, (ctx->features.net) ? YSIZE : -YSIZE);
+			SizeWindow(ctx->window, 0, (ctx->features.net) ? ctx->height : -ctx->height / 2);
+			refresh_window(ctx);
 			break;
 
 		case 'd':
@@ -764,9 +778,6 @@ static void handle_keyboard(Context *ctx, UWORD key)
 			// Remember old coordinates
 			const WORD x = ctx->window->LeftEdge;
 			const WORD y = ctx->window->TopEdge;
-
-			// Window is using WA_UserPort, so CloseWindow() will do CloseWindowSafely()
-			CloseWindow(ctx->window);
 
 			ctx->window = open_window(ctx, x, y);
 
@@ -796,16 +807,23 @@ static void handle_window_events(Context *ctx)
 {
 	struct IntuiMessage *msg;
 	while ((msg = (struct IntuiMessage *) GetMsg(ctx->window->UserPort))) {
-		const ULONG event_class = msg->Class;
-		const UWORD event_code = msg->Code;
+		const ULONG class = msg->Class;
+		const UWORD code = msg->Code;
 
-		ReplyMsg((struct Message *) msg);
+		ReplyMsg((struct Message *)msg);
 
-		if (event_class == IDCMP_CLOSEWINDOW) {
-			ctx->running = FALSE;
-		} else if (event_class == IDCMP_VANILLAKEY) {
-			handle_keyboard(ctx, event_code);
-		}
+		switch (class) {
+			case IDCMP_CLOSEWINDOW:
+				ctx->running = FALSE;
+				break;
+			case IDCMP_VANILLAKEY:
+				handle_keyboard(ctx, code);
+				break;
+			case IDCMP_NEWSIZE:
+				realloc_bitmap(ctx);
+ 				refresh_window(ctx);
+				break;
+	    }
 	}
 }
 
