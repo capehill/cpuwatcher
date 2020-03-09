@@ -1,4 +1,4 @@
-CPU Watcher 0.6
+CPU Watcher 0.7
 
 CPU Watcher is a simple tool to monitor CPU usage,
 free memory and network traffic.
@@ -135,7 +135,12 @@ v. 0.6
 	- replaced deprecated system calls, requires graphics.library V54
 	- fixed some task sync issues
 	- replaced pseudo transparency with opaqueness parameter (requires compositing)
-	- dowload graph position changed
+	- download graph position changed
 	- code cleanup and refactoring
-	- started a GitHub project
+	- started GitHub project
 
+v. 0.7
+	- add window resizing
+	- use graphics.library functions for drawing
+	- use GCC 8.3.0 to build
+	- smaller binary
