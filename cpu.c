@@ -154,8 +154,6 @@ typedef struct {
 
 } Context;
 
-static Context ctx;
-
 #define get_ptr(name) &ctx->samples[0].name
 #define get_cur(name) ctx->samples[ctx->iter].name
 
@@ -1086,6 +1084,8 @@ clean:
 
 int main(int argc, char ** argv)
 {
+	static Context ctx;
+
 	init_context(&ctx);
 
 	if (GfxBase->lib_Version < 54) {
