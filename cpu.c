@@ -154,6 +154,8 @@ typedef struct {
 
 } Context;
 
+static Context ctx;
+
 #define get_ptr(name) &ctx->samples[0].name
 #define get_cur(name) ctx->samples[ctx->iter].name
 
@@ -333,7 +335,7 @@ static void plot(Context *ctx, const UBYTE* const array, const ULONG color)
 		const int y = bottom - level;
 
 		if (x == 0) {
-			Move(&ctx->rastPort, SCALE_X(x), SCALE_Y(y));
+			Move(&ctx->rastPort, 0, SCALE_Y(y));
 		} else {
 			line_to(ctx, SCALE_X(x), SCALE_Y(y), color);
 		}
@@ -349,7 +351,7 @@ static void plot_net(Context *ctx, UBYTE *array, const int bottom, const ULONG c
 		const int start = bottom - level;
 
 		if (x == 0) {
-			Move(&ctx->rastPort, SCALE_X(x), SCALE_Y(start));
+			Move(&ctx->rastPort, 0, SCALE_Y(start));
 		} else {
 			line_to(ctx, SCALE_X(x), SCALE_Y(start), color);
 		}
@@ -1084,7 +1086,6 @@ clean:
 
 int main(int argc, char ** argv)
 {
-	Context ctx;
 	init_context(&ctx);
 
 	if (GfxBase->lib_Version < 54) {
