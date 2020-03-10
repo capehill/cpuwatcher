@@ -31,7 +31,7 @@ static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.7 (23.2
 
 #define WINDOW_TITLE_FORMAT "CPU: %3d%% V: %3d%% P: %3d%% G: %3d%%"
 #define SCREEN_TITLE_FORMAT \
-"CPU: %3d%% Virtual: %3d%% Public: %3d%% Graphics: %3d%% Download: %4.1fKiB/s Upload: %4.1fKiB/s Mode: %c"
+"CPU: %3d%% Virtual: %3d%% Public: %3d%% Graphics: %3d%% Download: %4.1fKiB/s Upload: %4.1fKiB/s Mode: %s"
 
 #define WINDOW_TITLE_LEN 64
 #define SCREEN_TITLE_LEN 128
@@ -159,8 +159,8 @@ typedef struct {
 
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
 
-#define SCALE_X(x) roundf((x) * ctx->scaleX)
-#define SCALE_Y(y) roundf((y) * ctx->scaleY)
+#define SCALE_X(x) (int)roundf(((float)x) * ctx->scaleX)
+#define SCALE_Y(y) (int)roundf(((float)y) * ctx->scaleY)
 
 // network.c
 void init_netstats(void);
@@ -325,17 +325,15 @@ static void line_to(Context *ctx, int x, int y, ULONG color)
 static void plot(Context *ctx, const UBYTE* const array, const ULONG color)
 {
 	int	x;
-	const int bottom = YSIZE - 1;
-
 	for (x = 0; x < XSIZE; x++) {
 		const int iter = (ctx->iter + 1 + x) % XSIZE;
 		const int level = *(array + iter * sizeof(Sample));
-		const int y = bottom - level;
+		const int y = YSIZE - level;
 
 		if (x == 0) {
-			Move(&ctx->rastPort, 0, SCALE_Y(y));
+			Move(&ctx->rastPort, 0, SCALE_Y(y) - 1);
 		} else {
-			line_to(ctx, SCALE_X(x), SCALE_Y(y), color);
+			line_to(ctx, SCALE_X(x), SCALE_Y(y) - 1, color);
 		}
 	}
 }
@@ -349,9 +347,9 @@ static void plot_net(Context *ctx, UBYTE *array, const int bottom, const ULONG c
 		const int start = bottom - level;
 
 		if (x == 0) {
-			Move(&ctx->rastPort, 0, SCALE_Y(start));
+			Move(&ctx->rastPort, 0, SCALE_Y(start) - 1);
 		} else {
-			line_to(ctx, SCALE_X(x), SCALE_Y(start), color);
+			line_to(ctx, SCALE_X(x), SCALE_Y(start) - 1, color);
 		}
 	}
 }
@@ -402,7 +400,7 @@ static void refresh_window(Context *ctx)
 
 	if (ctx->features.net) {
 		plot_net(ctx, get_ptr(upload), YSIZE + YSIZE / 2, ctx->colors.upload);
-		plot_net(ctx, get_ptr(download), 2 * YSIZE - 1, ctx->colors.download);
+		plot_net(ctx, get_ptr(download), 2 * YSIZE, ctx->colors.download);
 	}
 
 	BltBitMapRastPort(ctx->bm, 0, 0,
@@ -418,7 +416,7 @@ static void refresh_window(Context *ctx)
 
 	snprintf(ctx->screen_title, SCREEN_TITLE_LEN, SCREEN_TITLE_FORMAT,
 		get_cur(cpu), get_cur(virtual_mem), get_cur(public_mem), get_cur(video_mem),
-		ctx->dl_speed, ctx->ul_speed, ctx->simple_mode ? 'S' : 'B');
+		ctx->dl_speed, ctx->ul_speed, ctx->simple_mode ? "Simple" : "Busy");
 
 	SetWindowTitles(ctx->window,
 		(ctx->features.dragbar) ? ctx->window_title : NULL, ctx->screen_title);
@@ -586,11 +584,11 @@ static void query_window_size(Context *ctx)
 		WA_InnerHeight, &ctx->height,
 		TAG_DONE)) != 0)
 	{
-			printf("Failed get window attributes\n");
+			puts("Failed get window attributes");
 	}
 
-	ctx->scaleX = (float)ctx->width / XSIZE;
-	ctx->scaleY = (float)ctx->height / (ctx->features.net ? 2 * YSIZE : YSIZE);
+	ctx->scaleX = (float)ctx->width / (float)XSIZE;
+	ctx->scaleY = (float)ctx->height / (ctx->features.net ? 2.0f * (float)YSIZE : (float)YSIZE);
 }
 
 static BOOL realloc_bitmap(Context *ctx)
@@ -616,7 +614,7 @@ static BOOL realloc_bitmap(Context *ctx)
     		TAG_DONE);
 
     	if (!ctx->bm) {
-    		printf("Couln't allocate bitmap\n");
+    		puts("Couldn't allocate bitmap");
     		return FALSE;
     	}
 
@@ -634,14 +632,14 @@ static BOOL allocate_resources(Context *ctx)
 	ctx->main_sig = AllocSignal(-1);
 
 	if (ctx->main_sig == -1) {
-		printf("Couldn't allocate signal\n");
+		puts("Couldn't allocate signal");
 		goto clean;
 	}
 
 	ctx->samples = my_alloc(XSIZE * sizeof(Sample));
 
 	if (!ctx->samples) {
-		printf("Couldn't allocate sample data\n");
+		puts("Couldn't allocate sample data");
 		goto clean;
 	}
 
@@ -650,7 +648,7 @@ static BOOL allocate_resources(Context *ctx)
 		TAG_DONE);
 
 	if (!ctx->user_port) {
-		printf("Couldn't create user port\n");
+		puts("Couldn't create user port");
 		goto clean;
 	}
 
@@ -659,7 +657,7 @@ static BOOL allocate_resources(Context *ctx)
 		TAG_DONE);
 
 	if (!ctx->timer_port) {
-		printf("Couldn't create timer port\n");
+		puts("Couldn't create timer port");
 		goto clean;
 	}
 
@@ -669,7 +667,7 @@ static BOOL allocate_resources(Context *ctx)
 		TAG_DONE);
 
 	if (!ctx->timer_req) {
-		printf("Couldn't create IO request\n");
+		puts("Couldn't create IO request");
 		goto clean;
 	}
 
@@ -677,7 +675,7 @@ static BOOL allocate_resources(Context *ctx)
 		(struct IORequest *) ctx->timer_req, 0);
 		
 	if (ctx->timer_device) {		
-		printf("Couldn't open timer.device\n");
+		puts("Couldn't open timer.device");
 		goto clean;
 	}
 
@@ -685,35 +683,35 @@ static BOOL allocate_resources(Context *ctx)
 		(struct Library *) ctx->timer_req->Request.io_Device, "main", 1, NULL);
 		
 	if (!ITimer) {
-		printf("Couldn't get Timer interface\n");
+		puts("Couldn't get Timer interface");
 		goto clean;
 	}
 
 	ctx->window = open_window(ctx, ctx->x_pos, ctx->y_pos);
 
 	if (!ctx->window) {
-		printf("Couldn't open window\n");
+		puts("Couldn't open window");
 		goto clean;
 	}
 
 	ctx->window_title = my_alloc(WINDOW_TITLE_LEN);
 
 	if (!ctx->window_title) {
-		printf("Couldn't allocate window title\n");
+		puts("Couldn't allocate window title");
 		goto clean;
 	}
 
 	ctx->screen_title = my_alloc(SCREEN_TITLE_LEN);
 
 	if (!ctx->screen_title) {
-		printf("Couldn't allocate screen title\n");
+		puts("Couldn't allocate screen title");
 		goto clean;
 	}
 
     realloc_bitmap(ctx);
 
 	if (!ctx->bm) {
-		printf("Couln't allocate bitmap\n");
+		puts("Couln't allocate bitmap");
 		goto clean;
 	}
 
@@ -722,7 +720,7 @@ static BOOL allocate_resources(Context *ctx)
 		TAG_DONE);
 
 	if (!ctx->idle_task) {
-		printf("Couldn't create idler task\n");
+		puts("Couldn't create idler task");
 		goto clean;
 	}
 
@@ -784,7 +782,7 @@ static void handle_keyboard(Context *ctx, UWORD key)
 			if (ctx->window) {
 				ActivateWindow(ctx->window);
 			} else {
-				printf("Panic - can't reopen window!\n");
+				puts("Panic - can't reopen window!");
 				ctx->running = FALSE;
 			}
 			break;
@@ -844,7 +842,7 @@ static void measure_cpu(Context *ctx)
 	if (ctx->simple_mode) {
 		value -= ctx->run_count;
 	} else {
-		value -= 100 * (idle_time.total.Seconds * 1000000 + idle_time.total.Microseconds) / 1000000.0f;
+		value -= roundf(100.0f * (idle_time.total.Seconds * 1000000 + idle_time.total.Microseconds) / 1000000.0f);
 	}
 
 	ctx->run_count = 0;
@@ -856,11 +854,11 @@ static void measure_cpu(Context *ctx)
 
 static void measure_memory(Context *ctx)
 {
-	UBYTE value = 100 * (float) AvailMem(MEMF_PUBLIC) / AvailMem(MEMF_PUBLIC|MEMF_TOTAL);
+	UBYTE value = roundf(100.0f * (float)AvailMem(MEMF_PUBLIC) / (float)AvailMem(MEMF_PUBLIC|MEMF_TOTAL));
 
 	ctx->samples[ctx->iter].public_mem = clamp100(value);
 
-	value = 100 * (float) AvailMem(MEMF_VIRTUAL) / AvailMem(MEMF_VIRTUAL|MEMF_TOTAL);
+	value = roundf(100.0f * (float)AvailMem(MEMF_VIRTUAL) / (float)AvailMem(MEMF_VIRTUAL|MEMF_TOTAL));
 
 	ctx->samples[ctx->iter].virtual_mem = clamp100(value);
 
@@ -871,7 +869,7 @@ static void measure_memory(Context *ctx)
 		GBD_FreeMemory, &free_vid,
 		TAG_DONE) == 2) {
 			
-		value = 100.0 * free_vid / total_vid;
+		value = roundf(100.0f * (float)free_vid / (float)total_vid);
 
 		ctx->samples[ctx->iter].video_mem = clamp100(value);
 	}
@@ -1040,6 +1038,9 @@ static void init_context(Context *ctx)
 	ctx->colors.download = DL_COL;
 
 	ctx->opaqueness = 255;
+
+	ctx->scaleX = 1.0f;
+	ctx->scaleY = 1.0f;
 }
 
 static void main_loop(Context *ctx)
@@ -1089,7 +1090,7 @@ int main(int argc, char ** argv)
 	init_context(&ctx);
 
 	if (GfxBase->lib_Version < 54) {
-		printf("graphics.library V54 needed\n");
+		puts("graphics.library V54 needed");
 	} else {
 		handle_args(&ctx, argc, argv);
 
