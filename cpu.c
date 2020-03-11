@@ -159,8 +159,8 @@ typedef struct {
 
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
 
-#define SCALE_X(x) (int)roundf(((float)x) * ctx->scaleX)
-#define SCALE_Y(y) (int)roundf(((float)y) * ctx->scaleY)
+#define SCALE_X(x) (int)roundf((float)(x) * ctx->scaleX)
+#define SCALE_Y(y) (int)roundf((float)(y) * ctx->scaleY)
 
 // network.c
 void init_netstats(void);
