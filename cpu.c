@@ -27,11 +27,11 @@ TODO:
 #include <string.h>
 #include <math.h>
 
-static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.7 (23.2.2020)";
+static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.7 (11.3.2020)";
 
-#define WINDOW_TITLE_FORMAT "CPU: %3d%% V: %3d%% P: %3d%% G: %3d%%"
+#define WINDOW_TITLE_FORMAT "CPU: %3d%% RAM: %3d%% VID: %3d%%"
 #define SCREEN_TITLE_FORMAT \
-"CPU: %3d%% Virtual: %3d%% Public: %3d%% Graphics: %3d%% Download: %4.1fKiB/s Upload: %4.1fKiB/s Mode: %s"
+"CPU load: %3d%%. Free memory: %3d%%. Free video memory: %3d%%. Download: %4.1fKiB/s. Upload: %4.1fKiB/s. Mode: %s"
 
 #define WINDOW_TITLE_LEN 64
 #define SCREEN_TITLE_LEN 128
@@ -44,7 +44,6 @@ static __attribute__((used)) char *version_string = "$VER: CPU Watcher 0.7 (23.2
 
 // Graph colors
 #define CPU_COL		0xFF00A000 // Green
-#define PUB_COL		0xFFFF1010 // Red
 #define VIRT_COL	0xFF1010FF // Blue
 #define VID_COL		0xFF10C0F0 // Brighter blue
 #define GRID_COL	0xFF003000 // Dark green
@@ -61,7 +60,6 @@ struct TimerIFace *ITimer = NULL;
 typedef struct {
 	BOOL cpu;
 	BOOL grid;
-	BOOL public_mem;
 	BOOL virtual_mem;
 	BOOL video_mem;
 	BOOL solid_draw;
@@ -71,7 +69,6 @@ typedef struct {
 
 typedef struct {
 	ULONG cpu;
-	ULONG public_mem;
 	ULONG virtual_mem;
 	ULONG video_mem;
 	ULONG grid;
@@ -83,7 +80,6 @@ typedef struct {
 typedef struct {
 	UBYTE cpu;
 	UBYTE virtual_mem;
-	UBYTE public_mem;
 	UBYTE video_mem;
 	UBYTE upload;
 	UBYTE download;
@@ -382,10 +378,6 @@ static void refresh_window(Context *ctx)
 		draw_grid(ctx);
 	}
 
-	if (ctx->features.public_mem) {
-		plot(ctx, get_ptr(public_mem), ctx->colors.public_mem);
-	}
-
 	if (ctx->features.virtual_mem) {
 		plot(ctx, get_ptr(virtual_mem), ctx->colors.virtual_mem);
 	}
@@ -412,10 +404,10 @@ static void refresh_window(Context *ctx)
 		0xC0);
 
 	snprintf(ctx->window_title, WINDOW_TITLE_LEN, WINDOW_TITLE_FORMAT,
-		get_cur(cpu), get_cur(virtual_mem), get_cur(public_mem), get_cur(video_mem));
+		get_cur(cpu), get_cur(virtual_mem), get_cur(video_mem));
 
 	snprintf(ctx->screen_title, SCREEN_TITLE_LEN, SCREEN_TITLE_FORMAT,
-		get_cur(cpu), get_cur(virtual_mem), get_cur(public_mem), get_cur(video_mem),
+		get_cur(cpu), get_cur(virtual_mem), get_cur(video_mem),
 		ctx->dl_speed, ctx->ul_speed, ctx->simple_mode ? "Simple" : "Busy");
 
 	SetWindowTitles(ctx->window,
@@ -478,7 +470,6 @@ static void read_config(Context *ctx, STRPTR file_name)
 
 			set_bool(disk_object, "cpu", &ctx->features.cpu);
 			set_bool(disk_object, "grid", &ctx->features.grid);
-			set_bool(disk_object, "pmem", &ctx->features.public_mem);
 			set_bool(disk_object, "vmem", &ctx->features.virtual_mem);
 			set_bool(disk_object, "gmem", &ctx->features.video_mem);
 			set_bool(disk_object, "solid", &ctx->features.solid_draw);
@@ -497,7 +488,6 @@ static void read_config(Context *ctx, STRPTR file_name)
 			set_color(disk_object, "cpucol", &ctx->colors.cpu);
 			set_color(disk_object, "bgcol", &ctx->colors.background);
 			set_color(disk_object, "gmemcol", &ctx->colors.video_mem);
-			set_color(disk_object, "pmemcol", &ctx->colors.public_mem);
 			set_color(disk_object, "vmemcol", &ctx->colors.virtual_mem);
 			set_color(disk_object, "gridcol", &ctx->colors.grid);
 			set_color(disk_object, "ulcol", &ctx->colors.upload);
@@ -740,10 +730,6 @@ static void handle_keyboard(Context *ctx, UWORD key)
 			ctx->features.cpu ^= TRUE;
 			break;
 
-		case 'p':
-			ctx->features.public_mem ^= TRUE;
-			break;
-
 		case 'v':
 			ctx->features.virtual_mem ^= TRUE;
 			break;
@@ -854,11 +840,7 @@ static void measure_cpu(Context *ctx)
 
 static void measure_memory(Context *ctx)
 {
-	UBYTE value = roundf(100.0f * (float)AvailMem(MEMF_PUBLIC) / (float)AvailMem(MEMF_PUBLIC|MEMF_TOTAL));
-
-	ctx->samples[ctx->iter].public_mem = clamp100(value);
-
-	value = roundf(100.0f * (float)AvailMem(MEMF_VIRTUAL) / (float)AvailMem(MEMF_VIRTUAL|MEMF_TOTAL));
+	UBYTE value = roundf(100.0f * (float)AvailMem(MEMF_VIRTUAL) / (float)AvailMem(MEMF_VIRTUAL|MEMF_TOTAL));
 
 	ctx->samples[ctx->iter].virtual_mem = clamp100(value);
 
@@ -1018,7 +1000,6 @@ static void init_context(Context *ctx)
 	ctx->idle_sig = -1;
 
 	ctx->features.cpu = TRUE;
-	ctx->features.public_mem = TRUE;
 	ctx->features.virtual_mem = TRUE;
 	ctx->features.video_mem = TRUE;
 	ctx->features.solid_draw = TRUE;
@@ -1029,7 +1010,6 @@ static void init_context(Context *ctx)
 	ctx->timer_device = -1;
 
 	ctx->colors.cpu = CPU_COL;
-	ctx->colors.public_mem = PUB_COL;
 	ctx->colors.virtual_mem = VIRT_COL;
 	ctx->colors.video_mem = VID_COL;
 	ctx->colors.grid = GRID_COL;

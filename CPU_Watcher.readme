@@ -23,7 +23,6 @@ Features:
 - shows the last 5 minutes of CPU usage (green graph)
 
 - shows also the percentage of free
-	* public memory (red graph)
 	* virtual memory (blue graph)
 	* video memory (light blue graph)
 
@@ -36,8 +35,6 @@ Features:
 - supported icon tooltypes:
 
 	cpu: cpu graph ON/OFF.
-
-	pmem: public memory graph ON/OFF.
 
 	vmem: virtual memory graph ON/OFF.
 
@@ -63,8 +60,6 @@ Features:
 
 	cpucol: cpu graph color.
 	
-	pmemcol: public memory graph color.
-	
 	vmemcol: virtual memory graph color.
 	
 	gmemcol: gfx memory graph color.
@@ -78,8 +73,6 @@ Features:
 	c - cpu graph ON/OFF.
 
 	m - toggle between CPU measuring modes, "busy" and "simple".
-
-	p - public memory graph ON/OFF.
 
 	v - virtual memory graph ON/OFF.
 
