@@ -585,8 +585,13 @@ static void query_window_size(Context *ctx)
 
 static BOOL realloc_bitmap(Context *ctx)
 {
-	const ULONG w = GetBitMapAttr(ctx->bm, BMA_ACTUALWIDTH);
-	const ULONG h = GetBitMapAttr(ctx->bm, BMA_HEIGHT);
+	ULONG w = 0;
+	ULONG h = 0;
+
+	if (ctx->bm) {
+		w = GetBitMapAttr(ctx->bm, BMA_ACTUALWIDTH);
+		h = GetBitMapAttr(ctx->bm, BMA_HEIGHT);
+	}
 
 	query_window_size(ctx);
 
