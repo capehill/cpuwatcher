@@ -65,6 +65,7 @@ typedef struct {
 	BOOL solid_draw;
 	BOOL net;
 	BOOL dragbar;
+	BOOL resize;
 } Features;
 
 typedef struct {
@@ -476,6 +477,7 @@ static void read_config(Context *ctx, STRPTR file_name)
 			set_bool(disk_object, "dragbar", &ctx->features.dragbar);
 			set_bool(disk_object, "net", &ctx->features.net);
 			set_bool(disk_object, "simple", (BOOL *)&ctx->simple_mode);
+			set_bool(disk_object, "resize", &ctx->features.resize);
 
 			set_int(disk_object, "xpos", &ctx->x_pos);
 			set_int(disk_object, "ypos", &ctx->y_pos);
@@ -548,10 +550,10 @@ static struct Window *open_window(Context *ctx, int x, int y)
 		WA_InnerWidth, width,
 		WA_InnerHeight, height,
 		WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_VANILLAKEY | IDCMP_NEWSIZE,
-		WA_CloseGadget, (ctx->features.dragbar) ? TRUE : FALSE,
-		WA_DragBar, (ctx->features.dragbar) ? TRUE : FALSE,
-		WA_DepthGadget, (ctx->features.dragbar) ? TRUE : FALSE,
-        WA_SizeGadget, TRUE,
+		WA_CloseGadget, ctx->features.dragbar,
+		WA_DragBar, ctx->features.dragbar,
+		WA_DepthGadget, ctx->features.dragbar,
+		WA_SizeGadget, ctx->features.resize,
 		WA_UserPort, ctx->user_port,
 		WA_Opaqueness, ctx->opaqueness,
 		//WA_SimpleRefresh, TRUE,
@@ -559,7 +561,7 @@ static struct Window *open_window(Context *ctx, int x, int y)
 
 	if (window) {
 		if (!WindowLimits(window, minWidth + window->BorderLeft + window->BorderRight,
-			minHeight + window->BorderTop + window->BorderBottom, 800, 600)) {
+			minHeight + window->BorderTop + window->BorderBottom, 1024, 1024)) {
 			puts("Failed to set window limits");
 		}
 	}
@@ -1005,6 +1007,7 @@ static void init_context(Context *ctx)
 	ctx->features.solid_draw = TRUE;
 	ctx->features.dragbar = TRUE;
 	ctx->features.grid = TRUE;
+	ctx->features.resize = TRUE;
 
 	ctx->running = TRUE;
 	ctx->timer_device = -1;

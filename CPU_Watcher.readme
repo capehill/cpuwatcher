@@ -46,6 +46,8 @@ Features:
 
 	dragbar: window dragbar ON/OFF.
 
+	resize: size gadget ON/OFF.
+
 	xpos: window X position.
 
 	ypos: window Y position.
