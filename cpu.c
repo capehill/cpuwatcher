@@ -125,10 +125,10 @@ typedef struct {
 	BYTE main_sig;
 
 	struct TimeRequest *timer_req;
-		
+
 	BYTE timer_device;
 	struct TimeVal tv;
-		
+
 	int x_pos;
 	int y_pos;
 
@@ -170,9 +170,9 @@ typedef struct {
 #define SCALE_Y(y) (int)roundf((float)(y) * ctx->scaleY)
 
 typedef enum EMenu {
-    MID_Iconify = 1,
-    MID_About,
-    MID_Quit
+	MID_Iconify = 1,
+	MID_About,
+	MID_Quit
 } EMenu;
 
 Object* menu;
@@ -230,7 +230,7 @@ static void idler(uint32 p1)
 	idle_port = AllocSysObjectTags(ASOT_PORT,
 		ASOPORT_Name, "idler_port",
 		TAG_DONE);
-		
+
 	if (!idle_port) {
 		ctx->idler_trouble = TRUE;
 		goto die;
@@ -441,10 +441,10 @@ static ULONG parse_hex(STRPTR str)
 static void set_int(struct DiskObject *disk_object, STRPTR name, int *value)
 {
 	STRPTR tool_type = FindToolType(disk_object->do_ToolTypes, name);
-		
+
 	if (tool_type) {
 		const int temp = atoi(tool_type);
-			
+
 		if (temp >= 0) {
 			*value = temp;
 		}
@@ -461,7 +461,7 @@ static void set_bool(struct DiskObject *disk_object, STRPTR name, BOOL *value)
 static void set_color(struct DiskObject *disk_object, STRPTR name, ULONG *value)
 {
 	STRPTR tool_type = FindToolType(disk_object->do_ToolTypes, name);
-		
+
 	if (tool_type) {
 		*value = parse_hex(tool_type);
 	}
@@ -483,7 +483,7 @@ static void read_config(Context *ctx, STRPTR file_name)
 	if (file_name) {
 
 		struct DiskObject *disk_object = (struct DiskObject *)GetDiskObject(file_name);
-			
+
 		if (disk_object) {
 			int opaqueness = 255;
 
@@ -504,7 +504,7 @@ static void read_config(Context *ctx, STRPTR file_name)
 			set_int(disk_object, "opaqueness", &opaqueness);
 
 			ctx->opaqueness = validate_opaqueness(opaqueness);
-				
+
 			set_color(disk_object, "cpucol", &ctx->colors.cpu);
 			set_color(disk_object, "bgcol", &ctx->colors.background);
 			set_color(disk_object, "gmemcol", &ctx->colors.video_mem);
@@ -546,60 +546,60 @@ static void my_free(void *ptr)
 
 static Object* create_menu()
 {
-    menu = NewObject(NULL, "menuclass",
-        MA_Type, T_ROOT,
-        // Main
-        MA_AddChild, NewObject(NULL, "menuclass",
-            MA_Type, T_MENU,
-            MA_Label, "Main",
-            MA_AddChild, NewObject(NULL, "menuclass",
-                MA_Type, T_ITEM,
-                MA_Label, "About",
-                MA_ID, MID_About,
-                TAG_DONE),
-            MA_AddChild, NewObject(NULL, "menuclass",
-                MA_Type, T_ITEM,
-                MA_Label, "Iconfiy",
-                MA_ID, MID_Iconify,
-                TAG_DONE),
-            MA_AddChild, NewObject(NULL, "menuclass",
-                MA_Type, T_ITEM,
-                MA_Label, "Quit",
-                MA_ID, MID_Quit,
-                TAG_DONE),
-            TAG_DONE),
-        TAG_DONE);
+	menu = NewObject(NULL, "menuclass",
+		MA_Type, T_ROOT,
+		// Main
+		MA_AddChild, NewObject(NULL, "menuclass",
+			MA_Type, T_MENU,
+			MA_Label, "Main",
+			MA_AddChild, NewObject(NULL, "menuclass",
+				MA_Type, T_ITEM,
+				MA_Label, "About",
+				MA_ID, MID_About,
+				TAG_DONE),
+			MA_AddChild, NewObject(NULL, "menuclass",
+				MA_Type, T_ITEM,
+				MA_Label, "Iconfiy",
+				MA_ID, MID_Iconify,
+				TAG_DONE),
+			MA_AddChild, NewObject(NULL, "menuclass",
+				MA_Type, T_ITEM,
+				MA_Label, "Quit",
+				MA_ID, MID_Quit,
+				TAG_DONE),
+			TAG_DONE),
+		TAG_DONE);
 
-    if (!menu) {
-        puts("Failed to create menu");
-    }
+	if (!menu) {
+		puts("Failed to create menu");
+	}
 
-    return menu;
+	return menu;
 }
 
 static char* getApplicationName()
 {
-    #define maxPathLen 255
+	#define maxPathLen 255
 
-    static char pathBuffer[maxPathLen];
+	static char pathBuffer[maxPathLen];
 
 	if (!GetCliProgramName(pathBuffer, maxPathLen - 1)) {
 		puts("Failed to get CLI program name, checking task node");
 		snprintf(pathBuffer, maxPathLen, "%s", ((struct Node *)FindTask(NULL))->ln_Name);
-    }
+	}
 
-    return pathBuffer;
+	return pathBuffer;
 }
 
 static struct DiskObject* getDiskObject()
 {
-    struct DiskObject *diskObject = NULL;
+	struct DiskObject *diskObject = NULL;
 
 	BPTR oldDir = SetCurrentDir(GetProgramDir());
 	diskObject = GetDiskObject(getApplicationName());
 	SetCurrentDir(oldDir);
 
-    return diskObject;
+	return diskObject;
 }
 
 static struct Window *open_window(Context *ctx, int x, int y)
@@ -620,7 +620,7 @@ static struct Window *open_window(Context *ctx, int x, int y)
 	}
 
 	 ctx->windowObject = NewObject(NULL, "window.class",
-        WA_Activate, TRUE,
+		WA_Activate, TRUE,
 		WA_Left, x,
 		WA_Top, y,
 		WA_InnerWidth, width,
@@ -633,7 +633,7 @@ static struct Window *open_window(Context *ctx, int x, int y)
 		WA_UserPort, ctx->user_port,
 		WA_Opaqueness, ctx->opaqueness,
 		WA_MenuStrip, create_menu(),
-        WINDOW_IconifyGadget, TRUE,
+		WINDOW_IconifyGadget, TRUE,
 		WINDOW_Icon, getDiskObject(),
 		WINDOW_AppPort, ctx->app_port, // Iconification needs it
 		TAG_DONE);
@@ -642,7 +642,7 @@ static struct Window *open_window(Context *ctx, int x, int y)
 		puts("Failed to create window object");
 		return NULL;
 	}
-	
+
 	struct Window* window = (struct Window *)IDoMethod(ctx->windowObject, WM_OPEN);
 
 	if (!window) {
@@ -686,29 +686,29 @@ static BOOL realloc_bitmap(Context *ctx)
 
 	if (!ctx->bm || w < ctx->width || h < ctx->height) {
 		if (ctx->bm) {
-    		FreeBitMap(ctx->bm);
+			FreeBitMap(ctx->bm);
 		}
 
 		ctx->bm = AllocBitMapTags(ctx->width, ctx->height, 32,
-    		BMATags_PixelFormat, PIXF_A8R8G8B8,
-    		BMATags_Clear, TRUE,
+			BMATags_PixelFormat, PIXF_A8R8G8B8,
+			BMATags_Clear, TRUE,
 #if 0 // There doesn't seem to be much difference whether bitmap is in RAM or VRAM
-            BMATags_Displayable, TRUE,
+			BMATags_Displayable, TRUE,
 #else
-    		BMATags_UserPrivate, TRUE,
+			BMATags_UserPrivate, TRUE,
 #endif
-    		TAG_DONE);
+			TAG_DONE);
 
-    	if (!ctx->bm) {
-    		puts("Couldn't allocate bitmap");
-    		return FALSE;
-    	}
+		if (!ctx->bm) {
+			puts("Couldn't allocate bitmap");
+			return FALSE;
+		}
 
-    	InitRastPort(&ctx->rastPort);
-    	ctx->rastPort.BitMap = ctx->bm;
-    }
+		InitRastPort(&ctx->rastPort);
+		ctx->rastPort.BitMap = ctx->bm;
+	}
 
-    return TRUE;
+	return TRUE;
 }
 
 static BOOL allocate_resources(Context *ctx)
@@ -768,15 +768,15 @@ static BOOL allocate_resources(Context *ctx)
 
 	ctx->timer_device = OpenDevice(TIMERNAME, UNIT_WAITUNTIL,
 		(struct IORequest *) ctx->timer_req, 0);
-		
-	if (ctx->timer_device) {		
+
+	if (ctx->timer_device) {
 		puts("Couldn't open timer.device");
 		goto clean;
 	}
 
 	ITimer = (struct TimerIFace *) GetInterface(
 		(struct Library *) ctx->timer_req->Request.io_Device, "main", 1, NULL);
-		
+
 	if (!ITimer) {
 		puts("Couldn't get Timer interface");
 		goto clean;
@@ -803,7 +803,7 @@ static BOOL allocate_resources(Context *ctx)
 		goto clean;
 	}
 
-    realloc_bitmap(ctx);
+	realloc_bitmap(ctx);
 
 	if (!ctx->bm) {
 		puts("Couln't allocate bitmap");
@@ -894,19 +894,19 @@ static void handle_keyboard(Context *ctx, UWORD key)
 
 static void show_about_window(Context* ctx)
 {
-    Object* o = NewObject(NULL, "requester.class",
-        REQ_TitleText, "About CPU Watcher",
-        REQ_BodyText, VERSION_STRING DATE_STRING,
-        REQ_GadgetText, "_Ok",
-        REQ_Image, REQIMAGE_INFO,
-        TAG_DONE);
+	Object* o = NewObject(NULL, "requester.class",
+		REQ_TitleText, "About CPU Watcher",
+		REQ_BodyText, VERSION_STRING DATE_STRING,
+		REQ_GadgetText, "_Ok",
+		REQ_Image, REQIMAGE_INFO,
+		TAG_DONE);
 
-    if (o) {
-        SetWindowPointer(ctx->window, WA_BusyPointer, TRUE, TAG_DONE);
-        IDoMethod(o, RM_OPENREQ, NULL, ctx->window, NULL, TAG_DONE);
-        SetWindowPointer(ctx->window, TAG_DONE);
-        DisposeObject(o);
-    }
+	if (o) {
+		SetWindowPointer(ctx->window, WA_BusyPointer, TRUE, TAG_DONE);
+		IDoMethod(o, RM_OPENREQ, NULL, ctx->window, NULL, TAG_DONE);
+		SetWindowPointer(ctx->window, TAG_DONE);
+		DisposeObject(o);
+	}
 }
 
 static void handle_iconify(Context* ctx)
@@ -922,25 +922,25 @@ static void handle_uniconify(Context* ctx)
 
 static BOOL handle_menupick(Context *ctx)
 {
-    BOOL running = TRUE;
+	BOOL running = TRUE;
 
-    uint32 id = NO_MENU_ID;
+	uint32 id = NO_MENU_ID;
 
 	while (ctx->window && ((id = IDoMethod((Object *)ctx->window->MenuStrip, MM_NEXTSELECT, 0, id))) != NO_MENU_ID) {
-        switch(id) {
-            case MID_Quit:
-                running = FALSE;
-                break;
-            case MID_Iconify:
+		switch(id) {
+			case MID_Quit:
+				running = FALSE;
+				break;
+			case MID_Iconify:
 				handle_iconify(ctx);
-                break;
-            case MID_About:
-                show_about_window(ctx);
-                break;
-        }
-    }
+				break;
+			case MID_About:
+				show_about_window(ctx);
+				break;
+		}
+	}
 
-    return running;
+	return running;
 }
 
 static char getVanillaKey(Context *ctx)
@@ -962,14 +962,14 @@ static char getVanillaKey(Context *ctx)
 
 static void handle_window_events(Context *ctx)
 {
-    uint32 result;
-    int16 code = 0;
+	uint32 result;
+	int16 code = 0;
 
 	while ((result = IDoMethod(ctx->windowObject, WM_HANDLEINPUT, &code)) != WMHI_LASTMSG) {
-        switch (result & WMHI_CLASSMASK) {
-            case WMHI_CLOSEWINDOW:
+		switch (result & WMHI_CLASSMASK) {
+			case WMHI_CLOSEWINDOW:
 				ctx->running = FALSE;
-                break;
+				break;
 #if 0 // Doesn't trigger?
 			case WMHI_VANILLAKEY:
 				handle_keyboard(ctx, result & WMHI_KEYMASK);
@@ -982,20 +982,20 @@ static void handle_window_events(Context *ctx)
 				realloc_bitmap(ctx);
 				refresh_window(ctx);
 				break;
-            case WMHI_ICONIFY:
+			case WMHI_ICONIFY:
 				handle_iconify(ctx);
-                break;
-            case WMHI_UNICONIFY:
+				break;
+			case WMHI_UNICONIFY:
 				handle_uniconify(ctx);
-                break;
-            case WMHI_MENUPICK:
+				break;
+			case WMHI_MENUPICK:
 				ctx->running = handle_menupick(ctx);
-                break;
+				break;
 			default:
 				//printf("unhandled result %lx, code %x\n", result, code);
 				break;
-        }
-    }
+		}
+	}
 }
 
 static UBYTE clamp100(UBYTE value)
@@ -1037,7 +1037,7 @@ static void measure_memory(Context *ctx)
 		GBD_TotalMemory, &total_vid,
 		GBD_FreeMemory, &free_vid,
 		TAG_DONE) == 2) {
-			
+
 		value = roundf(100.0f * (float)free_vid / (float)total_vid);
 
 		ctx->samples[ctx->iter].video_mem = clamp100(value);
@@ -1050,7 +1050,7 @@ static void measure_network(Context *ctx, float *dl_speed, float *ul_speed)
 	UBYTE dl_p, ul_p;
 
 	if (update_netstats(&dl_p, &ul_p, &dl_mult, &ul_mult, dl_speed, ul_speed)) {
-			
+
 		int i;
 		for (i = 0; i < XSIZE; i++) {
 			ctx->samples[i].download *= dl_mult;
