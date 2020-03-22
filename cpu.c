@@ -31,7 +31,8 @@ TODO:
 #include <string.h>
 #include <math.h>
 
-#define VERSION_STRING "CPU Watcher 0.7"
+#define NAME_STRING "CPU Watcher"
+#define VERSION_STRING NAME_STRING " 0.7"
 #define DATE_STRING " (22.3.2020)"
 
 static __attribute__((used)) char *version_string = "$VER: " VERSION_STRING DATE_STRING;
@@ -584,7 +585,7 @@ static char* getApplicationName()
 	static char pathBuffer[maxPathLen];
 
 	if (!GetCliProgramName(pathBuffer, maxPathLen - 1)) {
-		puts("Failed to get CLI program name, checking task node");
+		//puts("Failed to get CLI program name, checking task node");
 		snprintf(pathBuffer, maxPathLen, "%s", ((struct Node *)FindTask(NULL))->ln_Name);
 	}
 
@@ -635,6 +636,7 @@ static struct Window *open_window(Context *ctx, int x, int y)
 		WA_MenuStrip, create_menu(),
 		WINDOW_IconifyGadget, ctx->features.dragbar,
 		WINDOW_Icon, getDiskObject(),
+		WINDOW_IconTitle, NAME_STRING,
 		WINDOW_AppPort, ctx->app_port, // Iconification needs it
 		TAG_DONE);
 
