@@ -136,6 +136,10 @@ v. 0.6
 
 v. 0.7
 	- add window resizing
+	- add menus
+	- add iconfication
+	- add About window
 	- use graphics.library functions for drawing
 	- use GCC 8.3.0 to build
-	- smaller binary
+	- use Window.class
+	- link smaller binary
