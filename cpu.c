@@ -32,7 +32,7 @@ TODO:
 #include <math.h>
 
 #define VERSION_STRING "CPU Watcher 0.7"
-#define DATE_STRING " (11.3.2020)"
+#define DATE_STRING " (22.3.2020)"
 
 static __attribute__((used)) char *version_string = "$VER: " VERSION_STRING DATE_STRING;
 
@@ -625,7 +625,7 @@ static struct Window *open_window(Context *ctx, int x, int y)
 		WA_Top, y,
 		WA_InnerWidth, width,
 		WA_InnerHeight, height,
-		WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_VANILLAKEY | IDCMP_RAWKEY | IDCMP_NEWSIZE | IDCMP_MENUPICK,
+		WA_IDCMP, IDCMP_CLOSEWINDOW | /*IDCMP_VANILLAKEY |*/ IDCMP_RAWKEY | IDCMP_NEWSIZE | IDCMP_MENUPICK,
 		WA_CloseGadget, ctx->features.dragbar,
 		WA_DragBar, ctx->features.dragbar,
 		WA_DepthGadget, ctx->features.dragbar,
@@ -633,7 +633,7 @@ static struct Window *open_window(Context *ctx, int x, int y)
 		WA_UserPort, ctx->user_port,
 		WA_Opaqueness, ctx->opaqueness,
 		WA_MenuStrip, create_menu(),
-		WINDOW_IconifyGadget, TRUE,
+		WINDOW_IconifyGadget, ctx->features.dragbar,
 		WINDOW_Icon, getDiskObject(),
 		WINDOW_AppPort, ctx->app_port, // Iconification needs it
 		TAG_DONE);
