@@ -667,6 +667,12 @@ static struct DiskObject* getDiskObject()
 
 	BPTR oldDir = SetCurrentDir(GetProgramDir());
 	diskObject = GetDiskObject(getApplicationName());
+
+	if (diskObject) {
+		diskObject->do_CurrentX = NO_ICON_POSITION;
+		diskObject->do_CurrentY = NO_ICON_POSITION;
+	}
+
 	SetCurrentDir(oldDir);
 
 	return diskObject;
@@ -1005,6 +1011,7 @@ static void handle_iconify(Context* ctx)
 static void handle_uniconify(Context* ctx)
 {
 	ctx->window = (struct Window *)IDoMethod(ctx->windowObject, WM_OPEN);
+	refresh_window(ctx);
 }
 
 static BOOL handle_menupick(Context *ctx)
