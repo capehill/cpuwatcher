@@ -108,6 +108,7 @@ typedef struct {
 	struct RastPort rastPort;
 
 	Object* windowObject;
+	Object* menu;
 
 	ULONG width;
 	ULONG height;
@@ -173,10 +174,16 @@ typedef struct {
 typedef enum EMenu {
 	MID_Iconify = 1,
 	MID_About,
-	MID_Quit
+	MID_Quit,
+	// Options,
+	MID_CpuGraph,
+	MID_NetGraph,
+	MID_Grid,
+	MID_VirtualMem,
+	MID_VideoMem,
+	MID_DragBar,
+	MID_SimpleMode
 } EMenu;
-
-Object* menu;
 
 // network.c
 void init_netstats(void);
@@ -545,9 +552,16 @@ static void my_free(void *ptr)
 	FreeVec(ptr);
 }
 
-static Object* create_menu()
+static void set_menu_item(Context * ctx, enum EMenu id, BOOL state)
 {
-	menu = NewObject(NULL, "menuclass",
+	if (!IDoMethod(ctx->menu, MM_SETSTATE, 0, id, MS_CHECKED, state ? MS_CHECKED : 0, TAG_DONE)) {
+		printf("Invalid menu id %d\n", id);
+	}
+}
+
+static Object* create_menu(Context * ctx)
+{
+	ctx->menu = NewObject(NULL, "menuclass",
 		MA_Type, T_ROOT,
 		// Main
 		MA_AddChild, NewObject(NULL, "menuclass",
@@ -569,13 +583,68 @@ static Object* create_menu()
 				MA_ID, MID_Quit,
 				TAG_DONE),
 			TAG_DONE),
+        // Options
+        MA_AddChild, NewObject(NULL, "menuclass",
+			MA_Type, T_MENU,
+			MA_Label, "Options",
+			MA_AddChild, NewObject(NULL, "menuclass",
+				MA_Type, T_ITEM,
+				MA_Label, "CPU usage",
+				MA_ID, MID_CpuGraph,
+				MA_Toggle, TRUE,
+				MA_Selected, ctx->features.cpu,
+				TAG_DONE),
+			MA_AddChild, NewObject(NULL, "menuclass",
+				MA_Type, T_ITEM,
+				MA_Label, "Net usage",
+				MA_ID, MID_NetGraph,
+				MA_Toggle, TRUE,
+				MA_Selected, ctx->features.net,
+				TAG_DONE),
+			MA_AddChild, NewObject(NULL, "menuclass",
+				MA_Type, T_ITEM,
+				MA_Label, "Grid",
+				MA_ID, MID_Grid,
+				MA_Toggle, TRUE,
+				MA_Selected, ctx->features.grid,
+				TAG_DONE),
+			MA_AddChild, NewObject(NULL, "menuclass",
+				MA_Type, T_ITEM,
+				MA_Label, "Free virtual memory",
+				MA_ID, MID_VirtualMem,
+				MA_Toggle, TRUE,
+				MA_Selected, ctx->features.virtual_mem,
+				TAG_DONE),
+			MA_AddChild, NewObject(NULL, "menuclass",
+				MA_Type, T_ITEM,
+				MA_Label, "Free video memory",
+				MA_ID, MID_VideoMem,
+				MA_Toggle, TRUE, ctx->features.video_mem,
+				MA_Selected,
+				TAG_DONE),
+			MA_AddChild, NewObject(NULL, "menuclass",
+				MA_Type, T_ITEM,
+				MA_Label, "Window dragbar",
+				MA_ID, MID_DragBar,
+				MA_Toggle, TRUE,
+				MA_Selected, ctx->features.dragbar,
+				TAG_DONE),
+			MA_AddChild, NewObject(NULL, "menuclass",
+				MA_Type, T_ITEM,
+				MA_Label, "Simple mode",
+				MA_ID, MID_SimpleMode,
+				MA_Toggle, TRUE, ctx->simple_mode,
+				MA_Selected,
+				TAG_DONE),
+
+            TAG_DONE),
 		TAG_DONE);
 
-	if (!menu) {
+	if (!ctx->menu) {
 		puts("Failed to create menu");
 	}
 
-	return menu;
+	return ctx->menu;
 }
 
 static char* getApplicationName()
@@ -633,7 +702,7 @@ static struct Window *open_window(Context *ctx, int x, int y)
 		WA_SizeGadget, ctx->features.resize,
 		WA_UserPort, ctx->user_port,
 		WA_Opaqueness, ctx->opaqueness,
-		WA_MenuStrip, create_menu(),
+		WA_MenuStrip, create_menu(ctx),
 		WINDOW_IconifyGadget, ctx->features.dragbar,
 		WINDOW_Icon, getDiskObject(),
 		WINDOW_IconTitle, NAME_STRING,
@@ -828,6 +897,29 @@ clean:
 	return result;
 }
 
+static void net_changed(Context *ctx)
+{
+	SizeWindow(ctx->window, 0, (ctx->features.net) ? ctx->height : -ctx->height / 2);
+    refresh_window(ctx);
+}
+
+static void dragbar_changed(Context *ctx)
+{
+	// Remember old coordinates
+	const WORD x = ctx->window->LeftEdge;
+	const WORD y = ctx->window->TopEdge;
+
+	ctx->window = open_window(ctx, x, y);
+
+	if (ctx->window) {
+		ActivateWindow(ctx->window);
+		refresh_window(ctx);
+	} else {
+		puts("Panic - can't reopen window!");
+		ctx->running = FALSE;
+	}
+}
+
 static void handle_keyboard(Context *ctx, UWORD key)
 {
 	BOOL update = TRUE;
@@ -835,18 +927,22 @@ static void handle_keyboard(Context *ctx, UWORD key)
 	switch (key) {
 		case 'c':
 			ctx->features.cpu ^= TRUE;
+			set_menu_item(ctx, MID_CpuGraph, ctx->features.cpu);
 			break;
 
 		case 'v':
 			ctx->features.virtual_mem ^= TRUE;
+			set_menu_item(ctx, MID_VirtualMem, ctx->features.virtual_mem);
 			break;
 
 		case 'x':
 			ctx->features.video_mem ^= TRUE;
+			set_menu_item(ctx, MID_VideoMem, ctx->features.video_mem);
 			break;
 
 		case 'g':
 			ctx->features.grid ^= TRUE;
+			set_menu_item(ctx, MID_Grid, ctx->features.grid);
 			break;
 
 		case 's':
@@ -855,29 +951,18 @@ static void handle_keyboard(Context *ctx, UWORD key)
 
 		case 'm':
 			ctx->simple_mode ^= TRUE;
+			set_menu_item(ctx, MID_SimpleMode, ctx->simple_mode);
 			break;
 
 		case 'n':
 			ctx->features.net ^= TRUE;
-			SizeWindow(ctx->window, 0, (ctx->features.net) ? ctx->height : -ctx->height / 2);
-			refresh_window(ctx);
+			set_menu_item(ctx, MID_NetGraph, ctx->features.net);
+			net_changed(ctx);
 			break;
 
 		case 'd':
 			ctx->features.dragbar ^= TRUE;
-
-			// Remember old coordinates
-			const WORD x = ctx->window->LeftEdge;
-			const WORD y = ctx->window->TopEdge;
-
-			ctx->window = open_window(ctx, x, y);
-
-			if (ctx->window) {
-				ActivateWindow(ctx->window);
-			} else {
-				puts("Panic - can't reopen window!");
-				ctx->running = FALSE;
-			}
+			dragbar_changed(ctx);
 			break;
 
 		case 'q':
@@ -938,6 +1023,31 @@ static BOOL handle_menupick(Context *ctx)
 				break;
 			case MID_About:
 				show_about_window(ctx);
+				break;
+
+			// Options
+			case MID_CpuGraph:
+				ctx->features.cpu = IDoMethod(ctx->menu, MM_GETSTATE, 0, id);
+				break;
+			case MID_NetGraph:
+				ctx->features.net = IDoMethod(ctx->menu, MM_GETSTATE, 0, id);
+				net_changed(ctx);
+				break;
+			case MID_Grid:
+				ctx->features.grid = IDoMethod(ctx->menu, MM_GETSTATE, 0, id);
+				break;
+			case MID_VirtualMem:
+				ctx->features.virtual_mem = IDoMethod(ctx->menu, MM_GETSTATE, 0, id);
+				break;
+			case MID_VideoMem:
+				ctx->features.video_mem = IDoMethod(ctx->menu, MM_GETSTATE, 0, id);
+				break;
+			case MID_DragBar:
+				ctx->features.dragbar = IDoMethod(ctx->menu, MM_GETSTATE, 0, id);
+				dragbar_changed(ctx);
+				break;
+			case MID_SimpleMode:
+				ctx->simple_mode = IDoMethod(ctx->menu, MM_GETSTATE, 0, id);
 				break;
 		}
 	}
