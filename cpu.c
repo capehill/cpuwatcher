@@ -554,7 +554,7 @@ static void my_free(void *ptr)
 
 static void set_menu_item(Context * ctx, enum EMenu id, BOOL state)
 {
-	if (!IDoMethod(ctx->menu, MM_SETSTATE, 0, id, MS_CHECKED, state ? MS_CHECKED : 0, TAG_DONE)) {
+	if (!IDoMethod(ctx->menu, MM_SETSTATE, 0, id, MS_CHECKED, state ? MS_CHECKED : 0)) {
 		printf("Invalid menu id %d\n", id);
 	}
 }
@@ -1020,7 +1020,7 @@ static BOOL handle_menupick(Context *ctx)
 
 	uint32 id = NO_MENU_ID;
 
-	while (ctx->window && ((id = IDoMethod((Object *)ctx->window->MenuStrip, MM_NEXTSELECT, 0, id))) != NO_MENU_ID) {
+	while (ctx->window && ((id = IDoMethod(ctx->menu, MM_NEXTSELECT, 0, id))) != NO_MENU_ID) {
 		switch(id) {
 			case MID_Quit:
 				running = FALSE;
@@ -1035,6 +1035,7 @@ static BOOL handle_menupick(Context *ctx)
 			// Options
 			case MID_CpuGraph:
 				ctx->features.cpu = IDoMethod(ctx->menu, MM_GETSTATE, 0, id);
+				refresh_window(ctx);
 				break;
 			case MID_NetGraph:
 				ctx->features.net = IDoMethod(ctx->menu, MM_GETSTATE, 0, id);
@@ -1042,12 +1043,15 @@ static BOOL handle_menupick(Context *ctx)
 				break;
 			case MID_Grid:
 				ctx->features.grid = IDoMethod(ctx->menu, MM_GETSTATE, 0, id);
+				refresh_window(ctx);
 				break;
 			case MID_VirtualMem:
 				ctx->features.virtual_mem = IDoMethod(ctx->menu, MM_GETSTATE, 0, id);
+				refresh_window(ctx);
 				break;
 			case MID_VideoMem:
 				ctx->features.video_mem = IDoMethod(ctx->menu, MM_GETSTATE, 0, id);
+				refresh_window(ctx);
 				break;
 			case MID_DragBar:
 				ctx->features.dragbar = IDoMethod(ctx->menu, MM_GETSTATE, 0, id);
