@@ -189,6 +189,33 @@ typedef enum EMenu {
 void init_netstats(void);
 BOOL update_netstats(UBYTE *, UBYTE *, float *, float *, float *, float *);
 
+static struct ClassLibrary* WindowBase;
+static struct ClassLibrary* RequesterBase;
+
+static Class* WindowClass;
+static Class* RequesterClass;
+
+static void OpenClasses()
+{
+    const int version = 53;
+
+    WindowBase = OpenClass("window.class", version, &WindowClass);
+    if (!WindowBase) {
+        puts("Failed to open window.class");
+    }
+
+    RequesterBase = OpenClass("requester.class", version, &RequesterClass);
+    if (!RequesterBase) {
+        puts("Failed to open requester.class");
+    }
+}
+
+static void CloseClasses()
+{
+    CloseClass(WindowBase);
+    CloseClass(RequesterBase);
+}
+
 // Idle task gives up CPU
 static void my_switch(void)
 {
@@ -695,7 +722,7 @@ static struct Window *open_window(Context *ctx, int x, int y)
 		ctx->window = NULL;
 	}
 
-	 ctx->windowObject = NewObject(NULL, "window.class",
+	 ctx->windowObject = NewObject(WindowClass, NULL,
 		WA_Activate, TRUE,
 		WA_Left, x,
 		WA_Top, y,
@@ -791,6 +818,8 @@ static BOOL realloc_bitmap(Context *ctx)
 static BOOL allocate_resources(Context *ctx)
 {
 	BOOL result = FALSE;
+
+    OpenClasses();
 
 	ctx->main_sig = AllocSignal(-1);
 
@@ -987,7 +1016,7 @@ static void handle_keyboard(Context *ctx, UWORD key)
 
 static void show_about_window(Context* ctx)
 {
-	Object* o = NewObject(NULL, "requester.class",
+	Object* o = NewObject(RequesterClass, NULL,
 		REQ_TitleText, "About CPU Watcher",
 		REQ_BodyText, VERSION_STRING DATE_STRING,
 		REQ_GadgetText, "_Ok",
@@ -1277,7 +1306,6 @@ static void free_resources(Context *ctx)
 		FreeSignal(ctx->main_sig);
 	}
 
-
 	if (ctx->windowObject) {
 		DisposeObject(ctx->windowObject);
 	}
@@ -1305,6 +1333,8 @@ static void free_resources(Context *ctx)
 	if (ctx->samples) {
 		my_free(ctx->samples);
 	}
+
+    CloseClasses();
 }
 
 static void init_context(Context *ctx)
